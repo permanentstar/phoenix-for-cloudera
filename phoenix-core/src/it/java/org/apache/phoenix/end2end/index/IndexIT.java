@@ -85,7 +85,7 @@ import com.google.common.collect.Maps;
 
 @RunWith(Parameterized.class)
 public class IndexIT extends BaseHBaseManagedTimeIT {
-    
+
     private final boolean localIndex;
     private final boolean transactional;
     private final boolean mutable;
@@ -94,13 +94,13 @@ public class IndexIT extends BaseHBaseManagedTimeIT {
     private final String indexName;
     private final String fullTableName;
     private final String fullIndexName;
-    
+
     public IndexIT(boolean localIndex, boolean mutable, boolean transactional) {
         this.localIndex = localIndex;
         this.transactional = transactional;
         this.mutable = mutable;
         StringBuilder optionBuilder = new StringBuilder();
-        if (!mutable) 
+        if (!mutable)
             optionBuilder.append(" IMMUTABLE_ROWS=true ");
         if (transactional) {
             if (!(optionBuilder.length()==0))
@@ -113,7 +113,7 @@ public class IndexIT extends BaseHBaseManagedTimeIT {
         this.fullTableName = SchemaUtil.getTableName(TestUtil.DEFAULT_SCHEMA_NAME, tableName);
         this.fullIndexName = SchemaUtil.getTableName(TestUtil.DEFAULT_SCHEMA_NAME, indexName);
     }
-    
+
     @BeforeClass
     @Shadower(classBeingShadowed = BaseHBaseManagedTimeIT.class)
     public static void doSetup() throws Exception {
@@ -124,9 +124,19 @@ public class IndexIT extends BaseHBaseManagedTimeIT {
 
     @Parameters(name="localIndex = {0} , mutable = {1} , transactional = {2}")
     public static Collection<Boolean[]> data() {
-        return Arrays.asList(new Boolean[][] {
-                 { false, false, false }, { false, false, true }, { false, true, false }, { false, true, true },
-                 { true, false, false }, { true, false, true }, { true, true, false }, { true, true, true }
+        return Arrays.asList(new Boolean[][] {     
+                 { false, false, false },
+                 // XXX: Disabled until Tephra 0.8.0-incubating supports CDH > 5.7
+                 // { false, false, true },
+                 { false, true, false },
+                 // XXX: Disabled until Tephra 0.8.0-incubating supports CDH > 5.7
+                 // { false, true, true },
+                 { true, false, false },
+                 // XXX: Disabled until Tephra 0.8.0-incubating supports CDH > 5.7
+                 // { true, false, true },
+                 { true, true, false },
+                 // XXX: Disabled until Tephra 0.8.0-incubating supports CDH > 5.7
+                 // { true, true, true }
            });
     }
 
@@ -769,18 +779,18 @@ public class IndexIT extends BaseHBaseManagedTimeIT {
             // make sure that the tables are empty, but reachable
             conn.createStatement().execute(
               "CREATE TABLE " + testTable
-                      + " (k VARCHAR NOT NULL PRIMARY KEY, v1 VARCHAR, v2 VARCHAR) "  + HTableDescriptor.MAX_FILESIZE + "=1, " + HTableDescriptor.MEMSTORE_FLUSHSIZE + "=1 " 
+                      + " (k VARCHAR NOT NULL PRIMARY KEY, v1 VARCHAR, v2 VARCHAR) "  + HTableDescriptor.MAX_FILESIZE + "=1, " + HTableDescriptor.MEMSTORE_FLUSHSIZE + "=1 "
                       + (!tableDDLOptions.isEmpty() ? "," + tableDDLOptions : "") + "SPLIT ON ('b')");
             query = "SELECT * FROM " + testTable;
             rs = conn.createStatement().executeQuery(query);
             assertFalse(rs.next());
-    
+
             conn.createStatement().execute(
                     "CREATE " + (localIndex ? "LOCAL " : "") + "INDEX " + indexName + " ON " + testTable + " (v1, v2)");
             query = "SELECT * FROM " + fullIndexName;
             rs = conn.createStatement().executeQuery(query);
             assertFalse(rs.next());
-        
+
             // load some data into the table
             PreparedStatement stmt =
                 conn.prepareStatement("UPSERT INTO " + testTable + " VALUES(?,?,?)");
@@ -797,7 +807,7 @@ public class IndexIT extends BaseHBaseManagedTimeIT {
             stmt.setString(3, "3");
             stmt.execute();
             conn.commit();
-            
+
             // make sure the index is working as expected
             query = "SELECT * FROM " + fullIndexName;
             rs = conn.createStatement().executeQuery(query);
@@ -814,7 +824,7 @@ public class IndexIT extends BaseHBaseManagedTimeIT {
             assertEquals("3", rs.getString(2));
             assertEquals("c", rs.getString(3));
             assertFalse(rs.next());
-    
+
             query = "SELECT * FROM " + testTable;
             rs = conn.createStatement().executeQuery("EXPLAIN " + query);
             if (localIndex) {
@@ -827,7 +837,7 @@ public class IndexIT extends BaseHBaseManagedTimeIT {
                         + "    SERVER FILTER BY FIRST KEY ONLY",
                         QueryUtil.getExplainPlan(rs));
             }
-        
+
             // check that the data table matches as expected
             rs = conn.createStatement().executeQuery(query);
             assertTrue(rs.next());
@@ -1036,11 +1046,11 @@ public class IndexIT extends BaseHBaseManagedTimeIT {
         String indexName = "IND_" + generateRandomString();
         String fullTableName = SchemaUtil.getTableName(TestUtil.DEFAULT_SCHEMA_NAME, tableName);
         // Check system tables priorities.
-        try (HBaseAdmin admin = driver.getConnectionQueryServices(null, null).getAdmin(); 
+        try (HBaseAdmin admin = driver.getConnectionQueryServices(null, null).getAdmin();
                 Connection c = DriverManager.getConnection(getUrl())) {
-            ResultSet rs = c.getMetaData().getTables("", 
-                    PhoenixDatabaseMetaData.SYSTEM_CATALOG_SCHEMA, 
-                    null, 
+            ResultSet rs = c.getMetaData().getTables("",
+                    PhoenixDatabaseMetaData.SYSTEM_CATALOG_SCHEMA,
+                    null,
                     new String[] {PTableType.SYSTEM.toString()});
             ReadOnlyProps p = c.unwrap(PhoenixConnection.class).getQueryServices().getProps();
             while (rs.next()) {
