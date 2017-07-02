@@ -4,7 +4,7 @@
   <parent>
     <groupId>org.apache.phoenix</groupId>
     <artifactId>phoenix</artifactId>
-    <version>4.11.1-HBase-1.2-SNAPSHOT</version>
+    <version>4.11.0-cdh5.11.2</version>
   </parent>
   <artifactId>phoenix-core</artifactId>
   <name>Phoenix Core</name>
@@ -249,7 +249,7 @@
     </dependency>
     <dependency>
       <groupId>org.apache.tephra</groupId>
-      <artifactId>tephra-hbase-compat-1.1</artifactId>
+      <artifactId>tephra-hbase-compat-1.2-cdh</artifactId>
     </dependency>
   
     <!-- Make sure we have all the antlr dependencies -->
