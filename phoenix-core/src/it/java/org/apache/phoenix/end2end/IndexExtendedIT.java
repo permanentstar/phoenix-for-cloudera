@@ -54,6 +54,7 @@ import org.apache.phoenix.util.SchemaUtil;
 import org.apache.phoenix.util.TestUtil;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
@@ -110,13 +111,13 @@ public class IndexExtendedIT extends BaseTest {
     @Parameters(name="transactional = {0} , mutable = {1} , localIndex = {2}, directApi = {3}, useSnapshot = {4}")
     public static Collection<Boolean[]> data() {
         return Arrays.asList(new Boolean[][] {
-                 { false, false, false, false, false }, { false, false, false, true, false }, { false, false, true, false, false }, { false, false, true, true, false },
-                 { false, true, false, false, false }, { false, true, false, true, false }, { false, true, true, false, false }, { false, true, true, true, false },
-                 { true, false, false, false, false }, { true, false, false, true, false }, { true, false, true, false, false }, { true, false, true, true, false },
-                 { true, true, false, false, false }, { true, true, false, true, false }, { true, true, true, false, false }, { true, true, true, true, false },
-                 { false, true, false, false, true }, { false, true, false, true, true }, { false, true, true, false, true }, { false, true, true, true, true },
-                 { true, false, false, false, true }, { true, false, false, true, true }, { true, false, true, false, true }, { true, false, true, true, true },
-                 { true, true, false, false, true }, { true, true, false, true, true }, { true, true, true, false, true }, { true, true, true, true, true }
+                 { false, false, false, false, false }, { false, false, false, true, false }, // { false, false, true, false, false }, { false, false, true, true, false },
+                 { false, true, false, false, false }, { false, true, false, true, false },   // { false, true, true, false, false },  { false, true, true, true, false },
+                 { true, false, false, false, false }, { true, false, false, true, false },   // { true, false, true, false, false },  { true, false, true, true, false },
+                 { true, true, false, false, false }, { true, true, false, true, false },     // { true, true, true, false, false },   { true, true, true, true, false },
+                 { false, true, false, false, true }, { false, true, false, true, true },     // { false, true, true, false, true },   { false, true, true, true, true },
+                 { true, false, false, false, true }, { true, false, false, true, true },     // { true, false, true, false, true },   { true, false, true, true, true },
+                 { true, true, false, false, true }, { true, true, false, true, true },       // { true, true, true, false, true },    { true, true, true, true, true }
            });
     }
     

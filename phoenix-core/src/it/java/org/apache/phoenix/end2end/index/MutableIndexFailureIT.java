@@ -142,18 +142,18 @@ public class MutableIndexFailureIT extends BaseTest {
                 { false, false, false, true, true},
                 { true, false, false, true, true},
                 { true, false, true, true, true},
-                { false, true, true, true, true},
-                { false, true, false, null, null},
-                { true, true, false, true, null},
-                { true, true, true, null, true},
+//                { false, true, true, true, true},
+//                { false, true, false, null, null},
+//                { true, true, false, true, null},
+//                { true, true, true, null, true},
 
                 { false, false, false, false, true},
-                { false, true, false, false, null},
+//                { false, true, false, false, null},
                 { false, false, false, false, false},
                 { false, false, false, true, true},
                 { false, false, false, true, true},
-                { false, true, false, true, true},
-                { false, true, false, true, true},
+//                { false, true, false, true, true},
+//                { false, true, false, true, true},
         } 
         );
     }

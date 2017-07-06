@@ -37,6 +37,7 @@ import org.apache.hadoop.hbase.coprocessor.SimpleRegionObserver;
 import org.apache.hadoop.hbase.regionserver.InternalScanner;
 import org.apache.phoenix.util.PropertiesUtil;
 import org.apache.phoenix.util.ReadOnlyProps;
+import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -57,7 +58,16 @@ public class RenewLeaseIT extends BaseUniqueNamesOwnClusterIT {
         serverProps.put(HConstants.HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD, Long.toString(SCANNER_LEASE_TIMEOUT));
         setUpTestDriver(new ReadOnlyProps(serverProps.entrySet().iterator()), new ReadOnlyProps(clientProps.entrySet().iterator()));
     }
-    
+
+    @AfterClass
+    public static void doTeardown() throws Exception {
+        try {
+            tearDownMiniCluster();
+        } catch (Exception e) {
+            // Just ignore teardown errors for this test
+        }
+    }
+
     @Test
     public void testLeaseDoesNotTimeout() throws Exception {
         Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);

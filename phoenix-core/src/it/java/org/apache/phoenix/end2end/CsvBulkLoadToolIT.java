@@ -41,8 +41,10 @@ import org.apache.phoenix.util.PhoenixRuntime;
 import org.apache.phoenix.util.ReadOnlyProps;
 import org.apache.phoenix.util.TestUtil;
 import org.junit.BeforeClass;
+import org.junit.Ignore;
 import org.junit.Test;
 
+@Ignore("Disabled until this test runs against LocalTestRunner in mr1-cdh")
 public class CsvBulkLoadToolIT extends BaseOwnClusterIT {
 
     private static Connection conn;
