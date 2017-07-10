@@ -37,6 +37,7 @@
     <module>phoenix-client</module>
     <module>phoenix-server</module>
     <module>phoenix-assembly</module>
+    <module>phoenix-parcel</module>
     <module>phoenix-tracing-webapp</module>
   </modules>
 
@@ -95,7 +96,9 @@
     <hadoop-two.mr1.version>${cdh.mr1.version}</hadoop-two.mr1.version>
 
     <!-- Dependency versions -->
-    <cdh.version>cdh5.11.2</cdh.version>
+    <phoenix.release.version>4.11.0</phoenix.release.version>
+    <cdh.version.number>5.11.2</cdh.version.number>
+    <cdh.version>cdh${cdh.version.number}</cdh.version>
     <commons-cli.version>1.2</commons-cli.version>
     <hive.version>${cdh.hive.version}</hive.version>
     <hadoop.version>${cdh.hadoop.version}</hadoop.version>
