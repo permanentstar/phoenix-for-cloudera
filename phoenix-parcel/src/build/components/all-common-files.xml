@@ -29,9 +29,9 @@
       <fileMode>0755</fileMode>
       <directoryMode>0755</directoryMode>
       <filtered>false</filtered>
-      <includes>
-        <include>*</include>
-      </includes>
+      <excludes>
+        <exclude>hbase-site.xml</exclude>
+      </excludes>
     </fileSet>
     <!-- lib/dev files -->
     <fileSet>
