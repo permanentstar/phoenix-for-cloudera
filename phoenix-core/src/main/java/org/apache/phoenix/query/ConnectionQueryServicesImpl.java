@@ -2428,16 +2428,21 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
                                         //check if the server is already updated and have namespace config properly set. 
                                         checkClientServerCompatibility(SYSTEM_CATALOG_NAME_BYTES);
                                     }
+
                                     ensureSystemTablesUpgraded(ConnectionQueryServicesImpl.this.getProps());
-                                } else if (mappedSystemCatalogExists) { throw new SQLExceptionInfo.Builder(
+                                } else if (mappedSystemCatalogExists) {
+                                    throw new SQLExceptionInfo.Builder(
                                         SQLExceptionCode.INCONSISTENET_NAMESPACE_MAPPING_PROPERTIES)
-                                .setMessage("Cannot initiate connection as "
+                                        .setMessage("Cannot initiate connection as "
                                         + SchemaUtil.getPhysicalTableName(
                                                 SYSTEM_CATALOG_NAME_BYTES, true)
                                                 + " is found but client does not have "
                                                 + IS_NAMESPACE_MAPPING_ENABLED + " enabled")
-                                                .build().buildException(); }
-                                createSysMutexTable(admin);
+                                                .build().buildException();
+                                } else {
+                                    // Make sure to also create the mutex table when namespace mapping is disabled
+                                    createSysMutexTable(admin, ConnectionQueryServicesImpl.this.getProps());
+                                }
                             }
                             Properties scnProps = PropertiesUtil.deepCopy(props);
                             scnProps.setProperty(PhoenixRuntime.CURRENT_SCN_ATTRIB,
@@ -2517,10 +2522,10 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
         }
     }
     
-    private void createSysMutexTable(HBaseAdmin admin) throws IOException, SQLException {
+    void createSysMutexTable(HBaseAdmin admin, ReadOnlyProps props) throws IOException, SQLException {
         try {
-            final TableName mutexTableName = TableName.valueOf(
-                PhoenixDatabaseMetaData.SYSTEM_MUTEX_NAME_BYTES);
+            final TableName mutexTableName = SchemaUtil.getPhysicalTableName(
+                PhoenixDatabaseMetaData.SYSTEM_MUTEX_NAME, props);
             List<TableName> systemTables = getSystemTableNames(admin);
             if (systemTables.contains(mutexTableName)) {
                 logger.debug("System mutex table already appears to exist, not creating it");
@@ -2532,7 +2537,7 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
             columnDesc.setTimeToLive(TTL_FOR_MUTEX); // Let mutex expire after some time
             tableDesc.addFamily(columnDesc);
             admin.createTable(tableDesc);
-            try (HTableInterface sysMutexTable = getTable(PhoenixDatabaseMetaData.SYSTEM_MUTEX_NAME_BYTES)) {
+            try (HTableInterface sysMutexTable = getTable(mutexTableName.getName())) {
                 byte[] mutexRowKey = SchemaUtil.getTableKey(null, PhoenixDatabaseMetaData.SYSTEM_CATALOG_SCHEMA,
                         PhoenixDatabaseMetaData.SYSTEM_CATALOG_TABLE);
                 Put put = new Put(mutexRowKey);
@@ -3135,6 +3140,16 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
                 // Regardless of the case 1 or 2, if the NS does not exist, we will error expectedly
                 // below. If the NS does exist and is mapped, the below check will exit gracefully.
             }
+
+            try {
+                // Create the mutex table if it doesn't already exist
+                // so that it will be moved into the SYSTEM namespace if necessary
+                createSysMutexTable(admin, props);
+            } catch (IOException e) {
+                // 1) SYSTEM:MUTEX does not exist, we couldn't create SYSTEM.MUTEX. We will fail
+                //    later when we try to access the table
+                // 2) SYSTEM:MUTEX does exist, it was OK we couldn't make SYSTEM.MUTEX. Pass.
+            }
             
             List<TableName> tableNames = getSystemTableNames(admin);
             // No tables exist matching "SYSTEM\..*", they are all already in "SYSTEM:.*"
@@ -3157,7 +3172,6 @@ public class ConnectionQueryServicesImpl extends DelegateQueryServices implement
                 }
                 tableNames.remove(PhoenixDatabaseMetaData.SYSTEM_CATALOG_HBASE_TABLE_NAME);
             }
-            tableNames.remove(PhoenixDatabaseMetaData.SYSTEM_MUTEX_HBASE_TABLE_NAME);
             for (TableName table : tableNames) {
                 UpgradeUtil.mapTableToNamespace(admin, metatable, table.getNameAsString(), props, null, PTableType.SYSTEM,
                         null);
