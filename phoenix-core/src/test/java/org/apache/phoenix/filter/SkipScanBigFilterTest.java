@@ -22,10 +22,8 @@ import static org.apache.phoenix.util.TestUtil.TEST_PROPERTIES;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
-import java.util.Collections;
 import java.util.Map;
 import java.util.Properties;
-import java.util.SortedMap;
 
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.compile.QueryPlan;
@@ -33,13 +31,14 @@ import org.apache.phoenix.end2end.Shadower;
 import org.apache.phoenix.jdbc.PhoenixConnection;
 import org.apache.phoenix.jdbc.PhoenixStatement;
 import org.apache.phoenix.query.BaseConnectionlessQueryTest;
+import org.apache.phoenix.query.ConnectionlessQueryServicesImpl;
 import org.apache.phoenix.query.QueryConstants;
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.schema.PTable;
-import org.apache.phoenix.schema.PTableImpl;
 import org.apache.phoenix.schema.PTableKey;
 import org.apache.phoenix.schema.stats.GuidePostsInfo;
-import org.apache.phoenix.schema.stats.PTableStats;
+import org.apache.phoenix.schema.stats.GuidePostsInfoBuilder;
+import org.apache.phoenix.schema.stats.GuidePostsKey;
 import org.apache.phoenix.util.PropertiesUtil;
 import org.apache.phoenix.util.ReadOnlyProps;
 import org.junit.BeforeClass;
@@ -646,31 +645,16 @@ public class SkipScanBigFilterTest extends BaseConnectionlessQueryTest {
         }
         stmt.execute();
         
-        final PTable table = conn.unwrap(PhoenixConnection.class).getMetaDataCache().getTable(new PTableKey(null, "PERF.BIG_OLAP_DOC"));
-        GuidePostsInfo info = new GuidePostsInfo(0,Collections.<byte[]> emptyList(), 0l);
+        final PTable table = conn.unwrap(PhoenixConnection.class).getTable(new PTableKey(null, "PERF.BIG_OLAP_DOC"));
+        GuidePostsInfoBuilder gpWriter = new GuidePostsInfoBuilder();
         for (byte[] gp : guidePosts) {
-            info.addGuidePost(gp, 1000);
+            gpWriter.addGuidePosts(gp, 1000);
         }
-        final SortedMap<byte[], GuidePostsInfo> gpMap = Maps.newTreeMap(Bytes.BYTES_COMPARATOR);
-        gpMap.put(QueryConstants.DEFAULT_COLUMN_FAMILY_BYTES, info);
-        PTable tableWithStats = PTableImpl.makePTable(table, new PTableStats() {
-
-            @Override
-            public SortedMap<byte[], GuidePostsInfo> getGuidePosts() {
-                return gpMap;
-            }
-
-            @Override
-            public int getEstimatedSize() {
-                return 10000;
-            }
-
-            @Override
-            public long getTimestamp() {
-                return table.getTimeStamp()+1;
-            }
-        });
-        conn.unwrap(PhoenixConnection.class).addTable(tableWithStats);
+        GuidePostsInfo info = gpWriter.build();
+        PhoenixConnection pConn = conn.unwrap(PhoenixConnection.class);
+        pConn.addTable(table, System.currentTimeMillis());
+        ((ConnectionlessQueryServicesImpl) pConn.getQueryServices())
+                .addTableStats(new GuidePostsKey(table.getName().getBytes(), QueryConstants.DEFAULT_COLUMN_FAMILY_BYTES), info);
 
         String query = "SELECT count(1) cnt,\n" + 
                 "       coalesce(SUM(impressions), 0.0) AS \"impressions\",\n" + 

@@ -28,20 +28,21 @@ echo "Starting...";sleep 2s
 # Set directory variables
 DIR_ROOT="$(cd $(dirname $0);pwd)/.."
 cd $DIR_ROOT
-PHOENIX="$(xpath -q -e '/project/version/text()' pom.xml)"
+PHOENIX="$(xmllint --xpath "//*[local-name()='project']/*[local-name()='version']/text()" pom.xml)"
 DIR_REL_BASE=$DIR_ROOT/release
-DIR_REL_ROOT=$DIR_REL_BASE/phoenix-$PHOENIX
-DIR_REL_BIN=phoenix-$PHOENIX-bin
+DIR_REL_ROOT=$DIR_REL_BASE/apache-phoenix-$PHOENIX
+DIR_REL_BIN=apache-phoenix-$PHOENIX-bin
 DIR_REL_BIN_PATH=$DIR_REL_ROOT/$DIR_REL_BIN
-REL_SRC=phoenix-$PHOENIX-src
+REL_SRC=apache-phoenix-$PHOENIX-src
 DIR_REL_SRC_TAR_PATH=$DIR_REL_ROOT/src
 DIR_REL_BIN_TAR_PATH=$DIR_REL_ROOT/bin
 DIR_BIN=$DIR_REL_BIN_PATH/bin
+DIR_PHERF_CONF=phoenix-pherf/config
 DIR_EXAMPLES=$DIR_REL_BIN_PATH/examples
 DIR_DOCS=dev/release_files
 
 # Verify no target exists
-mvn clean; mvn clean -Dhadoop.profile=2; rm -rf $DIR_REL_BASE;
+mvn clean; rm -rf $DIR_REL_BASE;
 RESULT=$(find -iname target)
 
 if [ -z "$RESULT" ]
@@ -68,24 +69,26 @@ mkdir $DIR_BIN;
 mv $REL_SRC.tar.gz $DIR_REL_SRC_TAR_PATH;
 
 # Copy common jars
-mvn clean apache-rat:check package -DskipTests;
+mvn clean apache-rat:check package -DskipTests -Dcheckstyle.skip=true -q;
 rm -rf $(find . -type d -name archive-tmp);
 
 # Copy all phoenix-*.jars to release dir
-phx_jars=$(find -iname phoenix-*.jar)
+phx_jars=$(find -iwholename "./*/target/phoenix-*.jar")
 cp $phx_jars $DIR_REL_BIN_PATH;
 
 # Copy bin
 cp bin/* $DIR_BIN;
+cp -R $DIR_PHERF_CONF $DIR_BIN;
 
 # Copy release docs
+
 cp $DIR_DOCS/* $DIR_REL_BIN_PATH;
 
 # Copy examples
 cp -r examples/* $DIR_EXAMPLES
 
 # Generate bin tar
-tar cvzf $DIR_REL_BIN_TAR_PATH/$DIR_REL_BIN.tar.gz -C $DIR_REL_ROOT phoenix-$PHOENIX-bin;
+tar cvzf $DIR_REL_BIN_TAR_PATH/$DIR_REL_BIN.tar.gz -C $DIR_REL_ROOT apache-phoenix-$PHOENIX-bin;
 rm -rf $DIR_REL_BIN_PATH;
 
 echo "DONE generating binary and source tars in release directory."
@@ -93,7 +96,7 @@ echo "Now signing source and binary tars"
 
 # Sign
 function_sign() {
-  phoenix_tar=$(find phoenix-*.gz);
+  phoenix_tar=$(find apache-phoenix-*.gz);
   gpg --armor --output $phoenix_tar.asc --detach-sig $phoenix_tar;
   md5sum -b $phoenix_tar > $phoenix_tar.md5;
   sha512sum -b $phoenix_tar > $phoenix_tar.sha;

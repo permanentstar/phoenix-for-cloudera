@@ -17,15 +17,11 @@
  */
 package org.apache.phoenix.execute;
 
-import java.sql.SQLException;
-
 import org.apache.phoenix.compile.QueryPlan;
 import org.apache.phoenix.compile.RowProjector;
 import org.apache.phoenix.compile.StatementContext;
 import org.apache.phoenix.compile.OrderByCompiler.OrderBy;
 import org.apache.phoenix.expression.Expression;
-import org.apache.phoenix.iterate.DefaultParallelScanGrouper;
-import org.apache.phoenix.iterate.ResultIterator;
 import org.apache.phoenix.parse.FilterableStatement;
 import org.apache.phoenix.schema.TableRef;
 
@@ -39,11 +35,11 @@ public abstract class ClientProcessingPlan extends DelegateQueryPlan {
     protected final TableRef table;
     protected final RowProjector projector;
     protected final Integer limit;
+    protected final Integer offset;
     protected final Expression where;
     protected final OrderBy orderBy;
-
     public ClientProcessingPlan(StatementContext context, FilterableStatement statement, TableRef table, 
-            RowProjector projector, Integer limit, Expression where, OrderBy orderBy, QueryPlan delegate) {
+            RowProjector projector, Integer limit, Integer offset, Expression where, OrderBy orderBy, QueryPlan delegate) {
         super(delegate);
         this.context = context;
         this.statement = statement;
@@ -52,6 +48,7 @@ public abstract class ClientProcessingPlan extends DelegateQueryPlan {
         this.limit = limit;
         this.where = where;
         this.orderBy = orderBy;
+        this.offset = offset;
     }
     
     @Override
@@ -73,6 +70,11 @@ public abstract class ClientProcessingPlan extends DelegateQueryPlan {
     public Integer getLimit() {
         return limit;
     }
+    
+    @Override
+    public Integer getOffset() {
+        return offset;
+    }
 
     @Override
     public OrderBy getOrderBy() {
@@ -82,10 +84,5 @@ public abstract class ClientProcessingPlan extends DelegateQueryPlan {
     @Override
     public FilterableStatement getStatement() {
         return statement;
-    }
-    
-    @Override
-    public ResultIterator iterator() throws SQLException {
-        return iterator(DefaultParallelScanGrouper.getInstance());
     }
 }

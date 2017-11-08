@@ -17,6 +17,7 @@
  */
 package org.apache.phoenix.schema.types;
 
+import static org.apache.phoenix.query.QueryConstants.MILLIS_IN_DAY;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -38,9 +39,11 @@ import java.util.List;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.exception.SQLExceptionCode;
+import org.apache.phoenix.query.KeyRange;
 import org.apache.phoenix.query.QueryConstants;
 import org.apache.phoenix.schema.ConstraintViolationException;
 import org.apache.phoenix.schema.SortOrder;
+import org.apache.phoenix.util.DateUtil;
 import org.apache.phoenix.util.ScanUtil;
 import org.apache.phoenix.util.TestUtil;
 import org.junit.Test;
@@ -1534,7 +1537,14 @@ public class PDataTypeTest {
         // Special case for 0.
         BigDecimal bd = new BigDecimal("0");
         byte[] b = PDecimal.INSTANCE.toBytes(bd);
-        int[] v = PDataType.getDecimalPrecisionAndScale(b, 0, b.length);
+        int[] v = PDataType.getDecimalPrecisionAndScale(b, 0, b.length, SortOrder.getDefault());
+        assertEquals(0, v[0]);
+        assertEquals(0, v[1]);
+
+        // Special case for 0 descending
+        bd = new BigDecimal("0");
+        b = PDecimal.INSTANCE.toBytes(bd, SortOrder.DESC);
+        v = PDataType.getDecimalPrecisionAndScale(b, 0, b.length, SortOrder.DESC);
         assertEquals(0, v[0]);
         assertEquals(0, v[1]);
 
@@ -1569,8 +1579,9 @@ public class PDataTypeTest {
         };
 
         for (int i=0; i<bds.length; i++) {
-            testReadDecimalPrecisionAndScaleFromRawBytes(bds[i]);
-            testReadDecimalPrecisionAndScaleFromRawBytes(bds[i].negate());
+            testReadDecimalPrecisionAndScaleFromRawBytes(bds[i], SortOrder.ASC);
+            testReadDecimalPrecisionAndScaleFromRawBytes(bds[i], SortOrder.DESC);
+            testReadDecimalPrecisionAndScaleFromRawBytes(bds[i].negate(), SortOrder.getDefault());
         }
         
         assertTrue(new BigDecimal("5").remainder(BigDecimal.ONE).equals(BigDecimal.ZERO));
@@ -1659,9 +1670,9 @@ public class PDataTypeTest {
         }
     }
 
-    private void testReadDecimalPrecisionAndScaleFromRawBytes(BigDecimal bd) {
-        byte[] b = PDecimal.INSTANCE.toBytes(bd);
-        int[] v = PDataType.getDecimalPrecisionAndScale(b, 0, b.length);
+    private void testReadDecimalPrecisionAndScaleFromRawBytes(BigDecimal bd, SortOrder sortOrder) {
+        byte[] b = PDecimal.INSTANCE.toBytes(bd, sortOrder);
+        int[] v = PDataType.getDecimalPrecisionAndScale(b, 0, b.length, sortOrder);
         assertEquals(bd.toString(), bd.precision(), v[0]);
         assertEquals(bd.toString(), bd.scale(), v[1]);
     }
@@ -1798,5 +1809,113 @@ public class PDataTypeTest {
             array[0] = (byte) i;
             assertTrue(Bytes.compareTo(array, QueryConstants.DESC_SEPARATOR_BYTE_ARRAY) <= 0);
         }
+    }
+    
+    @Test
+    public void testBoolean() {
+        byte[] bytes = PBoolean.INSTANCE.toBytes(Boolean.TRUE);
+        assertEquals(1, bytes[0]);
+        bytes = PBoolean.INSTANCE.toBytes(Boolean.FALSE);
+        assertEquals(0, bytes[0]);
+        
+        bytes = PBoolean.INSTANCE.toBytes(Boolean.TRUE, SortOrder.DESC);
+        assertEquals(0, bytes[0]);
+        bytes = PBoolean.INSTANCE.toBytes(Boolean.FALSE, SortOrder.DESC);
+        assertEquals(1, bytes[0]);
+        
+        Object dec = PDecimal.INSTANCE.toObject(Boolean.TRUE, PBoolean.INSTANCE);
+        bytes = PDecimal.INSTANCE.toBytes(dec);
+        Object b = PBoolean.INSTANCE.toObject(bytes, 0, bytes.length, PDecimal.INSTANCE, SortOrder.ASC);
+        assertEquals(true, b);
+        
+        dec = PDecimal.INSTANCE.toObject(Boolean.FALSE, PBoolean.INSTANCE);
+        bytes = PDecimal.INSTANCE.toBytes(dec);
+        b = PBoolean.INSTANCE.toObject(bytes, 0, bytes.length, PDecimal.INSTANCE, SortOrder.ASC);
+        assertEquals(false, b);
+        
+        dec = PDecimal.INSTANCE.toObject(Boolean.TRUE, PBoolean.INSTANCE);
+        bytes = PDecimal.INSTANCE.toBytes(dec, SortOrder.DESC);
+        b = PBoolean.INSTANCE.toObject(bytes, 0, bytes.length, PDecimal.INSTANCE, SortOrder.DESC);
+        assertEquals(true, b);
+        
+        dec = PDecimal.INSTANCE.toObject(Boolean.FALSE, PBoolean.INSTANCE);
+        bytes = PDecimal.INSTANCE.toBytes(dec, SortOrder.DESC);
+        b = PBoolean.INSTANCE.toObject(bytes, 0, bytes.length, PDecimal.INSTANCE, SortOrder.DESC);
+        assertEquals(false, b);
+    }
+    
+    @Test
+    public void testTimestampToDateComparison() {
+        long now = System.currentTimeMillis();
+        Timestamp ts1 = DateUtil.getTimestamp(now,  1111);    
+        final byte[] bytes1 = PTimestamp.INSTANCE.toBytes(ts1);
+        Date ts2 = new Date(now);
+        final byte[] bytes2 = PDate.INSTANCE.toBytes(ts2);
+        assertTrue(PTimestamp.INSTANCE.compareTo(bytes1, 0, bytes1.length, SortOrder.getDefault(), bytes2, 0, bytes2.length, SortOrder.getDefault(), PDate.INSTANCE) > 0);
+
+        Timestamp ts3 = DateUtil.getTimestamp(now,  0);    
+        final byte[] bytes3 = PTimestamp.INSTANCE.toBytes(ts3);
+        assertTrue(PTimestamp.INSTANCE.compareTo(bytes3, 0, bytes3.length, SortOrder.getDefault(), bytes2, 0, bytes2.length, SortOrder.getDefault(), PDate.INSTANCE) == 0);
+
+        Timestamp ts4 = DateUtil.getTimestamp(now,  0);    
+        final byte[] bytes4 = PUnsignedTimestamp.INSTANCE.toBytes(ts4);
+        assertTrue(PUnsignedTimestamp.INSTANCE.compareTo(bytes4, 0, bytes4.length, SortOrder.getDefault(), bytes2, 0, bytes2.length, SortOrder.getDefault(), PDate.INSTANCE) == 0);
+    }
+    
+    @Test
+    public void testTimestamp() {
+        long now = System.currentTimeMillis();
+        Timestamp ts1 = DateUtil.getTimestamp(now,  1111);
+        final byte[] bytes1 = PTimestamp.INSTANCE.toBytes(ts1);
+        Timestamp ts2 = DateUtil.getTimestamp(now,  1112);
+        final byte[] bytes2 = PTimestamp.INSTANCE.toBytes(ts2);
+        assertTrue(Bytes.compareTo(bytes1, bytes2) < 0);
+        
+        final byte[] ibytes1 = SortOrder.invert(bytes1, 0, bytes1.length);
+        final byte[] ibytes2 = SortOrder.invert(bytes2, 0, bytes2.length);
+        assertTrue(Bytes.compareTo(ibytes1, ibytes2) > 0);
+
+        Timestamp ts3 = new Timestamp(now+1);
+        final byte[] bytes3 = PTimestamp.INSTANCE.toBytes(ts3);
+        assertTrue(Bytes.compareTo(bytes3, bytes2) > 0);
+        final byte[] ibytes3 = SortOrder.invert(bytes3, 0, bytes3.length);
+        assertTrue(Bytes.compareTo(ibytes3, ibytes2) < 0);
+        
+        Timestamp ts4 = new Timestamp(now-1);
+        byte[] bytes4 = PTimestamp.INSTANCE.toBytes(ts4);
+        assertTrue(Bytes.compareTo(bytes4, bytes1) < 0);
+        byte[] ibytes4 = SortOrder.invert(bytes4, 0, bytes4.length);
+        assertTrue(Bytes.compareTo(ibytes4, ibytes1) > 0);
+    }
+    
+    @Test
+    public void testAscExclusiveTimestampRange() {
+        long now = System.currentTimeMillis();
+        Timestamp ts1 = DateUtil.getTimestamp(now,  999999);
+        final byte[] lowerRange = PTimestamp.INSTANCE.toBytes(ts1);
+        Timestamp ts2 = new Timestamp(now + MILLIS_IN_DAY);
+        final byte[] upperRange = PTimestamp.INSTANCE.toBytes(ts2);
+        KeyRange range = PTimestamp.INSTANCE.getKeyRange(lowerRange, false, upperRange, false);
+        Timestamp ts3 = new Timestamp(now + 1);
+        // Rolled up to next millis
+        final byte[] expectedLowerRange = PTimestamp.INSTANCE.toBytes(ts3);
+        assertTrue(Bytes.compareTo(expectedLowerRange, range.getLowerRange()) == 0);
+        assertTrue(Bytes.compareTo(upperRange, range.getUpperRange()) == 0);
+    }
+
+    
+    @Test
+    public void testDescExclusiveTimestampRange() {
+        long now = System.currentTimeMillis();
+        Timestamp ts1 = new Timestamp(now + MILLIS_IN_DAY);
+        final byte[] lowerRange = PTimestamp.INSTANCE.toBytes(ts1, SortOrder.DESC);
+        Timestamp ts2 = new Timestamp(now);
+        final byte[] upperRange = PTimestamp.INSTANCE.toBytes(ts2, SortOrder.DESC);
+        KeyRange range = PTimestamp.INSTANCE.getKeyRange(lowerRange, false, upperRange, false);
+        Timestamp ts3 = DateUtil.getTimestamp(now + MILLIS_IN_DAY - 1,  999999);
+        // Rolled up to next millis
+        final byte[] expectedLowerRange = PTimestamp.INSTANCE.toBytes(ts3, SortOrder.DESC);
+        assertTrue(Bytes.compareTo(expectedLowerRange, range.getLowerRange()) == 0);
+        assertTrue(Bytes.compareTo(upperRange, range.getUpperRange()) == 0);
     }
 }

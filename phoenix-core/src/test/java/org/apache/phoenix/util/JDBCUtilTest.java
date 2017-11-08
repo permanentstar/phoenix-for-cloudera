@@ -21,12 +21,15 @@ import static org.apache.phoenix.util.PhoenixRuntime.ANNOTATION_ATTRIB_PREFIX;
 import static org.apache.phoenix.util.PhoenixRuntime.TENANT_ID_ATTRIB;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Map;
 import java.util.Properties;
 
+import com.google.common.collect.Maps;
 import org.apache.hadoop.hbase.client.Consistency;
+import org.apache.phoenix.query.QueryServices;
 import org.junit.Test;
 
 public class JDBCUtilTest {
@@ -106,7 +109,14 @@ public class JDBCUtilTest {
     @Test
     public void testGetConsistency_TIMELINE_InUrl() {
         assertTrue(JDBCUtil.getConsistencyLevel("localhost;Consistency=TIMELINE", new Properties(),
-                Consistency.STRONG.toString()) == Consistency.TIMELINE);
+            Consistency.STRONG.toString()) == Consistency.TIMELINE);
+    }
+
+    @Test
+    public void testSchema() {
+        assertTrue(JDBCUtil.getSchema("localhost;schema=TEST", new Properties(), null).equals("TEST"));
+        assertNull(JDBCUtil.getSchema("localhost;schema=", new Properties(), null));
+        assertNull(JDBCUtil.getSchema("localhost;", new Properties(), null));
     }
 
     @Test
@@ -114,6 +124,21 @@ public class JDBCUtilTest {
         Properties props = new Properties();
         props.setProperty(PhoenixRuntime.CONSISTENCY_ATTRIB, "TIMELINE");
         assertTrue(JDBCUtil.getConsistencyLevel("localhost", props, Consistency.STRONG.toString())
-                == Consistency.TIMELINE);
+            == Consistency.TIMELINE);
+    }
+
+    @Test
+    public void testGetMaxMutateBytes() throws Exception {
+        assertEquals(1000L, JDBCUtil.getMutateBatchSizeBytes("localhost;" + PhoenixRuntime.UPSERT_BATCH_SIZE_BYTES_ATTRIB +
+            "=1000", new Properties(), ReadOnlyProps.EMPTY_PROPS));
+
+        Properties props = new Properties();
+        props.setProperty(PhoenixRuntime.UPSERT_BATCH_SIZE_BYTES_ATTRIB, "2000");
+        assertEquals(2000L, JDBCUtil.getMutateBatchSizeBytes("localhost", props, ReadOnlyProps.EMPTY_PROPS));
+
+        Map<String, String> propMap = Maps.newHashMap();
+        propMap.put(QueryServices.MUTATE_BATCH_SIZE_BYTES_ATTRIB, "3000");
+        ReadOnlyProps readOnlyProps = new ReadOnlyProps(propMap);
+        assertEquals(3000L, JDBCUtil.getMutateBatchSizeBytes("localhost", new Properties(), readOnlyProps));
     }
 }

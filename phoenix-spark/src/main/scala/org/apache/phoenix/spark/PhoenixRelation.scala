@@ -23,8 +23,9 @@ import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{Row, SQLContext}
 import org.apache.spark.sql.sources._
 import org.apache.phoenix.util.StringUtil.escapeStringConstant
+import org.apache.phoenix.util.SchemaUtil
 
-case class PhoenixRelation(tableName: String, zkUrl: String)(@transient val sqlContext: SQLContext)
+case class PhoenixRelation(tableName: String, zkUrl: String, dateAsTimestamp: Boolean = false)(@transient val sqlContext: SQLContext)
     extends BaseRelation with PrunedFilteredScan {
 
   /*
@@ -41,7 +42,8 @@ case class PhoenixRelation(tableName: String, zkUrl: String)(@transient val sqlC
       requiredColumns,
       Some(buildFilter(filters)),
       Some(zkUrl),
-      new Configuration()
+      new Configuration(),
+      dateAsTimestamp
     ).toDataFrame(sqlContext).rdd
   }
 
@@ -53,7 +55,8 @@ case class PhoenixRelation(tableName: String, zkUrl: String)(@transient val sqlC
       Seq(),
       None,
       Some(zkUrl),
-      new Configuration()
+      new Configuration(),
+      dateAsTimestamp
     ).toDataFrame(sqlContext).schema
   }
 
@@ -68,19 +71,27 @@ case class PhoenixRelation(tableName: String, zkUrl: String)(@transient val sqlC
     var i = 0
 
     filters.foreach(f => {
+      // Assume conjunction for multiple filters, unless otherwise specified
       if (i > 0) {
         filter.append(" AND")
       }
 
       f match {
-        case EqualTo(attr, value) => filter.append(s" $attr = ${compileValue(value)}")
-        case GreaterThan(attr, value) => filter.append(s" $attr > ${compileValue(value)}")
-        case GreaterThanOrEqual(attr, value) => filter.append(s" $attr >= ${compileValue(value)}")
-        case LessThan(attr, value) => filter.append(s" $attr < ${compileValue(value)}")
-        case LessThanOrEqual(attr, value) => filter.append(s" $attr <= ${compileValue(value)}")
-        case IsNull(attr) => filter.append(s" $attr IS NULL")
-        case IsNotNull(attr) => filter.append(s" $attr IS NOT NULL")
-        case _ => throw new Exception("Unsupported filter")
+        // Spark 1.3.1+ supported filters
+        case And(leftFilter, rightFilter) => filter.append(buildFilter(Array(leftFilter, rightFilter)))
+        case Or(leftFilter, rightFilter) => filter.append(buildFilter(Array(leftFilter)) + " OR " + buildFilter(Array(rightFilter)))
+        case Not(aFilter) => filter.append(" NOT " + buildFilter(Array(aFilter)))
+        case EqualTo(attr, value) => filter.append(s" ${escapeKey(attr)} = ${compileValue(value)}")
+        case GreaterThan(attr, value) => filter.append(s" ${escapeKey(attr)} > ${compileValue(value)}")
+        case GreaterThanOrEqual(attr, value) => filter.append(s" ${escapeKey(attr)} >= ${compileValue(value)}")
+        case LessThan(attr, value) => filter.append(s" ${escapeKey(attr)} < ${compileValue(value)}")
+        case LessThanOrEqual(attr, value) => filter.append(s" ${escapeKey(attr)} <= ${compileValue(value)}")
+        case IsNull(attr) => filter.append(s" ${escapeKey(attr)} IS NULL")
+        case IsNotNull(attr) => filter.append(s" ${escapeKey(attr)} IS NOT NULL")
+        case In(attr, values) => filter.append(s" ${escapeKey(attr)} IN ${values.map(compileValue).mkString("(", ",", ")")}")
+        case StringStartsWith(attr, value) => filter.append(s" ${escapeKey(attr)} LIKE ${compileValue(value + "%")}")
+        case StringEndsWith(attr, value) => filter.append(s" ${escapeKey(attr)} LIKE ${compileValue("%" + value)}")
+        case StringContains(attr, value) => filter.append(s" ${escapeKey(attr)} LIKE ${compileValue("%" + value + "%")}")
       }
 
       i = i + 1
@@ -88,6 +99,9 @@ case class PhoenixRelation(tableName: String, zkUrl: String)(@transient val sqlC
 
     filter.toString()
   }
+
+  // Helper function to escape column key to work with SQL queries
+  private def escapeKey(key: String): String = SchemaUtil.getEscapedArgument(key)
 
   // Helper function to escape string values in SQL queries
   private def compileValue(value: Any): Any = value match {

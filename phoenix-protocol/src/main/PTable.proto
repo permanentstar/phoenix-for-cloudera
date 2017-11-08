@@ -1,6 +1,4 @@
 /*
- * Copyright 2010 The Apache Software Foundation
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -48,6 +46,8 @@ message PColumn {
   optional bool viewReferenced = 11;
   optional string expression = 12;
   optional bool isRowTimestamp = 13;
+  optional bool isDynamic = 14;
+  optional bytes columnQualifierBytes = 15;
 }
 
 message PTableStats {
@@ -71,7 +71,10 @@ message PTable {
   repeated PColumn columns = 9;
   repeated PTable indexes = 10;
   required bool isImmutableRows = 11;
-  repeated PTableStats guidePosts = 12;
+  // Do NOT reuse the tag '12'. Stats are no longer passed
+  // along with the PTable.
+  //repeated PTableStats guidePosts = 12;
+  // TODO remove this field in 5.0 release
   optional bytes dataTableNameBytes = 13;
   optional bytes defaultFamilyName = 14;
   required bool disableWAL = 15;
@@ -86,4 +89,20 @@ message PTable {
   optional bool storeNulls = 24;
   optional int32 baseColumnCount = 25;
   optional bool rowKeyOrderOptimizable = 26;
+  optional bool transactional = 27;
+  optional int64 updateCacheFrequency = 28;
+  optional int64 indexDisableTimestamp = 29;
+  optional bool isNamespaceMapped = 30;
+  optional string autoParititonSeqName = 31;
+  optional bool isAppendOnlySchema = 32;
+  optional bytes parentNameBytes = 33;
+  optional bytes storageScheme = 34;
+  optional bytes encodingScheme = 35;
+  repeated EncodedCQCounter encodedCQCounters = 36;
+  optional bool useStatsForParallelization = 37;
+}
+
+message EncodedCQCounter {
+	required string colFamily = 1;
+	required int32 counter = 2;
 }

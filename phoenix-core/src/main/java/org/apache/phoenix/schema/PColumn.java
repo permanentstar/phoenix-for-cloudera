@@ -27,7 +27,7 @@ package org.apache.phoenix.schema;
 public interface PColumn extends PDatum {
 
     /**
-     * @return the name of the column qualifier
+     * @return the name of the column
      */
     PName getName();
 
@@ -58,4 +58,8 @@ public interface PColumn extends PDatum {
      * @return whether this column represents/stores the hbase cell timestamp.
      */
     boolean isRowTimestamp();
+    
+    boolean isDynamic();
+    
+    byte[] getColumnQualifierBytes();
 }

@@ -20,6 +20,7 @@ package org.apache.phoenix.expression.function;
 import java.util.List;
 
 import org.apache.phoenix.expression.Expression;
+import org.apache.phoenix.parse.FunctionParseNode;
 import org.apache.phoenix.parse.FunctionParseNode.Argument;
 import org.apache.phoenix.parse.FunctionParseNode.BuiltInFunction;
 import org.apache.phoenix.parse.RoundParseNode;
@@ -31,8 +32,6 @@ import org.apache.phoenix.schema.types.PVarchar;
 /**
  * Base class for RoundFunction.
  * 
- * 
- * @since 0.1
  */
 @BuiltInFunction(name = RoundFunction.NAME, 
                  nodeClass = RoundParseNode.class,
@@ -40,11 +39,15 @@ import org.apache.phoenix.schema.types.PVarchar;
                         @Argument(allowedTypes={PTimestamp.class, PDecimal.class}),
                         @Argument(allowedTypes={PVarchar.class, PInteger.class}, defaultValue = "null", isConstant=true),
                         @Argument(allowedTypes={PInteger.class}, defaultValue="1", isConstant=true)
-                        } 
+                        },
+                 classType = FunctionParseNode.FunctionClassType.ABSTRACT,
+                 derivedFunctions = {RoundDateExpression.class, RoundTimestampExpression.class, RoundDecimalExpression.class}
                 )
 public abstract class RoundFunction extends ScalarFunction {
     
     public static final String NAME = "ROUND";
+    
+    public RoundFunction() {}
     
     public RoundFunction(List<Expression> children) {
         super(children);

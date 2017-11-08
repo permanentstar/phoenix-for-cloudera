@@ -37,6 +37,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.HTableInterface;
@@ -55,6 +56,7 @@ import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.AddServerCac
 import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.RemoveServerCacheRequest;
 import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.RemoveServerCacheResponse;
 import org.apache.phoenix.coprocessor.generated.ServerCachingProtos.ServerCachingService;
+import org.apache.phoenix.index.IndexMaintainer;
 import org.apache.phoenix.jdbc.PhoenixConnection;
 import org.apache.phoenix.job.JobManager.JobCallable;
 import org.apache.phoenix.memory.MemoryManager.MemoryChunk;
@@ -81,6 +83,7 @@ import com.google.common.collect.ImmutableSet;
  */
 public class ServerCacheClient {
     public static final int UUID_LENGTH = Bytes.SIZEOF_LONG;
+    public static final byte[] KEY_IN_FIRST_REGION = new byte[]{0};
     private static final Log LOG = LogFactory.getLog(ServerCacheClient.class);
     private static final Random RANDOM = new Random();
     private final PhoenixConnection connection;
@@ -144,7 +147,7 @@ public class ServerCacheClient {
 
     }
     
-    public ServerCache addServerCache(ScanRanges keyRanges, final ImmutableBytesWritable cachePtr, final ServerCacheFactory cacheFactory, final TableRef cacheUsingTableRef) throws SQLException {
+    public ServerCache addServerCache(ScanRanges keyRanges, final ImmutableBytesWritable cachePtr, final byte[] txState, final ServerCacheFactory cacheFactory, final TableRef cacheUsingTableRef) throws SQLException {
         ConnectionQueryServices services = connection.getQueryServices();
         MemoryChunk chunk = services.getMemoryManager().allocate(cachePtr.getLength());
         List<Closeable> closeables = new ArrayList<Closeable>();
@@ -161,7 +164,7 @@ public class ServerCacheClient {
         ExecutorService executor = services.getExecutor();
         List<Future<Boolean>> futures = Collections.emptyList();
         try {
-            PTable cacheUsingTable = cacheUsingTableRef.getTable();
+            final PTable cacheUsingTable = cacheUsingTableRef.getTable();
             List<HRegionLocation> locations = services.getAllTableRegions(cacheUsingTable.getPhysicalName().getBytes());
             int nRegions = locations.size();
             // Size these based on worst case
@@ -172,13 +175,12 @@ public class ServerCacheClient {
                 byte[] regionStartKey = entry.getRegionInfo().getStartKey();
                 byte[] regionEndKey = entry.getRegionInfo().getEndKey();
                 if ( ! servers.contains(entry) && 
-                        keyRanges.intersects(regionStartKey, regionEndKey,
-                                cacheUsingTable.getIndexType() == IndexType.LOCAL ? 
-                                    ScanUtil.getRowKeyOffset(regionStartKey, regionEndKey) : 0, true)) {  
+                        keyRanges.intersectRegion(regionStartKey, regionEndKey,
+                                cacheUsingTable.getIndexType() == IndexType.LOCAL)) {  
                     // Call RPC once per server
                     servers.add(entry);
                     if (LOG.isDebugEnabled()) {LOG.debug(addCustomAnnotations("Adding cache entry to be sent for " + entry, connection));}
-                    final byte[] key = entry.getRegionInfo().getStartKey();
+                    final byte[] key = getKeyInRegion(entry.getRegionInfo().getStartKey());
                     final HTableInterface htable = services.getTable(cacheUsingTableRef.getTable().getPhysicalName().getBytes());
                     closeables.add(htable);
                     futures.add(executor.submit(new JobCallable<Boolean>() {
@@ -195,14 +197,30 @@ public class ServerCacheClient {
                                                     BlockingRpcCallback<AddServerCacheResponse> rpcCallback =
                                                             new BlockingRpcCallback<AddServerCacheResponse>();
                                                     AddServerCacheRequest.Builder builder = AddServerCacheRequest.newBuilder();
-                                                    if(connection.getTenantId() != null){
-                                                        builder.setTenantId(ByteStringer.wrap(connection.getTenantId().getBytes()));
+                                                    final byte[] tenantIdBytes;
+                                                    if(cacheUsingTable.isMultiTenant()) {
+                                                        try {
+                                                            tenantIdBytes = connection.getTenantId() == null ? null :
+                                                                    ScanUtil.getTenantIdBytes(
+                                                                            cacheUsingTable.getRowKeySchema(),
+                                                                            cacheUsingTable.getBucketNum() != null,
+                                                                            connection.getTenantId(), cacheUsingTable.getViewIndexId() != null);
+                                                        } catch (SQLException e) {
+                                                            throw new IOException(e);
+                                                        }
+                                                    } else {
+                                                        tenantIdBytes = connection.getTenantId() == null ? null : connection.getTenantId().getBytes();
+                                                    }
+                                                    if (tenantIdBytes != null) {
+                                                        builder.setTenantId(ByteStringer.wrap(tenantIdBytes));
                                                     }
                                                     builder.setCacheId(ByteStringer.wrap(cacheId));
                                                     builder.setCachePtr(org.apache.phoenix.protobuf.ProtobufUtil.toProto(cachePtr));
+                                                    builder.setHasProtoBufIndexMaintainer(true);
                                                     ServerCacheFactoryProtos.ServerCacheFactory.Builder svrCacheFactoryBuider = ServerCacheFactoryProtos.ServerCacheFactory.newBuilder();
                                                     svrCacheFactoryBuider.setClassName(cacheFactory.getClass().getName());
                                                     builder.setCacheFactory(svrCacheFactoryBuider.build());
+                                                    builder.setTxState(ByteStringer.wrap(txState));
                                                     instance.addServerCache(controller, builder.build(), rpcCallback);
                                                     if(controller.getFailedOn() != null) {
                                                         throw controller.getFailedOn();
@@ -289,6 +307,7 @@ public class ServerCacheClient {
     	ConnectionQueryServices services = connection.getQueryServices();
     	Throwable lastThrowable = null;
     	TableRef cacheUsingTableRef = cacheUsingTableRefMap.get(Bytes.mapKey(cacheId));
+    	final PTable cacheUsingTable = cacheUsingTableRef.getTable();
     	byte[] tableName = cacheUsingTableRef.getTable().getPhysicalName().getBytes();
     	HTableInterface iterateOverTable = services.getTable(tableName);
     	try {
@@ -304,7 +323,7 @@ public class ServerCacheClient {
     		for (HRegionLocation entry : locations) {
     			if (remainingOnServers.contains(entry)) {  // Call once per server
     				try {
-    					byte[] key = entry.getRegionInfo().getStartKey();
+                        byte[] key = getKeyInRegion(entry.getRegionInfo().getStartKey());
     					iterateOverTable.coprocessorService(ServerCachingService.class, key, key, 
     							new Batch.Call<ServerCachingService, RemoveServerCacheResponse>() {
     						@Override
@@ -313,10 +332,24 @@ public class ServerCacheClient {
     							BlockingRpcCallback<RemoveServerCacheResponse> rpcCallback =
     									new BlockingRpcCallback<RemoveServerCacheResponse>();
     							RemoveServerCacheRequest.Builder builder = RemoveServerCacheRequest.newBuilder();
-    							if(connection.getTenantId() != null){
-    								builder.setTenantId(ByteStringer.wrap(connection.getTenantId().getBytes()));
-    							}
-    							builder.setCacheId(ByteStringer.wrap(cacheId));
+                                final byte[] tenantIdBytes;
+                                if(cacheUsingTable.isMultiTenant()) {
+                                    try {
+                                        tenantIdBytes = connection.getTenantId() == null ? null :
+                                                ScanUtil.getTenantIdBytes(
+                                                        cacheUsingTable.getRowKeySchema(),
+                                                        cacheUsingTable.getBucketNum() != null,
+                                                        connection.getTenantId(), cacheUsingTable.getViewIndexId() != null);
+                                    } catch (SQLException e) {
+                                        throw new IOException(e);
+                                    }
+                                } else {
+                                    tenantIdBytes = connection.getTenantId() == null ? null : connection.getTenantId().getBytes();
+                                }
+                                if (tenantIdBytes != null) {
+                                    builder.setTenantId(ByteStringer.wrap(tenantIdBytes));
+                                }
+                                builder.setCacheId(ByteStringer.wrap(cacheId));
     							instance.removeServerCache(controller, builder.build(), rpcCallback);
     							if(controller.getFailedOn() != null) {
     								throw controller.getFailedOn();
@@ -352,5 +385,13 @@ public class ServerCacheClient {
     public static String idToString(byte[] uuid) {
         assert(uuid.length == Bytes.SIZEOF_LONG);
         return Long.toString(Bytes.toLong(uuid));
+    }
+
+    private static byte[] getKeyInRegion(byte[] regionStartKey) {
+        assert (regionStartKey != null);
+        if (Bytes.equals(regionStartKey, HConstants.EMPTY_START_ROW)) {
+            return KEY_IN_FIRST_REGION;
+        }
+        return regionStartKey;
     }
 }

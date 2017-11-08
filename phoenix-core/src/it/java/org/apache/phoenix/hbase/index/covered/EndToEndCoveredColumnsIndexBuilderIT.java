@@ -43,14 +43,14 @@ import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.regionserver.Region;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.phoenix.util.EnvironmentEdge;
-import org.apache.phoenix.util.EnvironmentEdgeManager;
 import org.apache.phoenix.end2end.NeedsOwnMiniClusterTest;
 import org.apache.phoenix.hbase.index.IndexTestingUtils;
 import org.apache.phoenix.hbase.index.Indexer;
 import org.apache.phoenix.hbase.index.TableName;
 import org.apache.phoenix.hbase.index.covered.update.ColumnReference;
 import org.apache.phoenix.hbase.index.scanner.Scanner;
+import org.apache.phoenix.util.EnvironmentEdge;
+import org.apache.phoenix.util.EnvironmentEdgeManager;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -59,7 +59,7 @@ import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
 /**
- * End-to-End test of just the {@link CoveredColumnsIndexBuilder}, but with a simple
+ * End-to-End test of just the {@link NonTxIndexBuilder}, but with a simple
  * {@link IndexCodec} and BatchCache implementation.
  */
 @Category(NeedsOwnMiniClusterTest.class)
@@ -107,11 +107,6 @@ public class EndToEndCoveredColumnsIndexBuilderIT {
     UTIL.startMiniCluster();
   }
 
-  @AfterClass
-  public static void shutdownCluster() throws Exception {
-    UTIL.shutdownMiniCluster();
-  }
-
   @Before
   public void setup() throws Exception {
     this.state = setupTest(TestTable.getTableNameString());
@@ -146,9 +141,22 @@ public class EndToEndCoveredColumnsIndexBuilderIT {
 
     @Override
     public void verify(TableState state) {
+        IndexMetaData indexMetaData = new IndexMetaData() {
+
+            @Override
+            public boolean isImmutableRows() {
+                return false;
+            }
+
+            @Override
+            public boolean ignoreNewerMutations() {
+                return false;
+            }
+              
+          };
       try {
         Scanner kvs =
-            ((LocalTableState) state).getIndexedColumnsTableState(Arrays.asList(columns)).getFirst();
+            ((LocalTableState) state).getIndexedColumnsTableState(Arrays.asList(columns), false, false, indexMetaData).getFirst();
 
         int count = 0;
         Cell kv;
@@ -172,15 +180,15 @@ public class EndToEndCoveredColumnsIndexBuilderIT {
     private Queue<TableStateVerifier> verifiers = new ArrayDeque<TableStateVerifier>();
 
     @Override
-    public Iterable<IndexUpdate> getIndexDeletes(TableState state) {
+    public Iterable<IndexUpdate> getIndexDeletes(TableState state, IndexMetaData context) {
       verify(state);
-      return super.getIndexDeletes(state);
+      return super.getIndexDeletes(state, context);
     }
 
     @Override
-    public Iterable<IndexUpdate> getIndexUpserts(TableState state) {
+    public Iterable<IndexUpdate> getIndexUpserts(TableState state, IndexMetaData context) {
       verify(state);
-      return super.getIndexUpserts(state);
+      return super.getIndexUpserts(state, context);
     }
 
     private void verify(TableState state) {
@@ -302,9 +310,9 @@ public class EndToEndCoveredColumnsIndexBuilderIT {
     Map<String, String> indexerOpts = new HashMap<String, String>();
     // just need to set the codec - we are going to set it later, but we need something here or the
     // initializer blows up.
-    indexerOpts.put(CoveredColumnsIndexBuilder.CODEC_CLASS_NAME_KEY,
+    indexerOpts.put(NonTxIndexBuilder.CODEC_CLASS_NAME_KEY,
       CoveredIndexCodecForTesting.class.getName());
-    Indexer.enableIndexing(desc, CoveredColumnsIndexBuilder.class, indexerOpts, Coprocessor.PRIORITY_USER);
+    Indexer.enableIndexing(desc, NonTxIndexBuilder.class, indexerOpts, Coprocessor.PRIORITY_USER);
 
     // create the table
     HBaseAdmin admin = UTIL.getHBaseAdmin();
@@ -315,8 +323,8 @@ public class EndToEndCoveredColumnsIndexBuilderIT {
     Region region = UTIL.getMiniHBaseCluster().getRegions(tableNameBytes).get(0);
     Indexer indexer =
         (Indexer) region.getCoprocessorHost().findCoprocessor(Indexer.class.getName());
-    CoveredColumnsIndexBuilder builder =
-        (CoveredColumnsIndexBuilder) indexer.getBuilderForTesting();
+    NonTxIndexBuilder builder =
+        (NonTxIndexBuilder) indexer.getBuilderForTesting();
     VerifyingIndexCodec codec = new VerifyingIndexCodec();
     builder.setIndexCodecForTesting(codec);
 

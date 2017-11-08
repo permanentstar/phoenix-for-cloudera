@@ -13,27 +13,34 @@
  */
 package org.apache.phoenix.spark
 
-import java.text.DecimalFormat
+import java.sql.DriverManager
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.hbase.{HBaseConfiguration, HConstants}
 import org.apache.hadoop.io.NullWritable
+import org.apache.phoenix.jdbc.PhoenixDriver
 import org.apache.phoenix.mapreduce.PhoenixInputFormat
 import org.apache.phoenix.mapreduce.util.PhoenixConfigurationUtil
 import org.apache.phoenix.schema.types._
-import org.apache.phoenix.util.{PhoenixRuntime, ColumnInfo}
+import org.apache.phoenix.util.ColumnInfo
 import org.apache.spark._
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.types.{DataType, StructField, StructType}
-import org.apache.spark.sql.{Row, DataFrame, SQLContext}
 import org.apache.spark.sql.types._
+import org.apache.spark.sql.{DataFrame, Row, SQLContext}
+
 import scala.collection.JavaConverters._
 
 class PhoenixRDD(sc: SparkContext, table: String, columns: Seq[String],
-                 predicate: Option[String] = None, zkUrl: Option[String] = None,
-                 @transient conf: Configuration)
-  extends RDD[PhoenixRecordWritable](sc, Nil) with Logging {
+                 predicate: Option[String] = None,
+                 zkUrl: Option[String] = None,
+                 @transient conf: Configuration, dateAsTimestamp: Boolean = false,
+                 tenantId: Option[String] = None
+                )
+  extends RDD[PhoenixRecordWritable](sc, Nil) {
+
+  // Make sure to register the Phoenix driver
+  DriverManager.registerDriver(new PhoenixDriver)
 
   @transient lazy val phoenixConf = {
     getPhoenixConfiguration
@@ -46,6 +53,10 @@ class PhoenixRDD(sc: SparkContext, table: String, columns: Seq[String],
 
   override protected def getPartitions: Array[Partition] = {
     phoenixRDD.partitions
+  }
+
+  override protected def getPreferredLocations(split: Partition): Seq[String] = {
+    phoenixRDD.preferredLocations(split)
   }
 
   @DeveloperApi
@@ -83,9 +94,9 @@ class PhoenixRDD(sc: SparkContext, table: String, columns: Seq[String],
 
     // Override the Zookeeper URL if present. Throw exception if no address given.
     zkUrl match {
-      case Some(url) => config.set(HConstants.ZOOKEEPER_QUORUM, url )
+      case Some(url) => ConfigurationUtil.setZookeeperURL(config, url)
       case _ => {
-        if(config.get(HConstants.ZOOKEEPER_QUORUM) == null) {
+        if(ConfigurationUtil.getZookeeperURL(config).isEmpty) {
           throw new UnsupportedOperationException(
             s"One of zkUrl or '${HConstants.ZOOKEEPER_QUORUM}' config property must be provided"
           )
@@ -93,28 +104,43 @@ class PhoenixRDD(sc: SparkContext, table: String, columns: Seq[String],
       }
     }
 
+    tenantId match {
+      case Some(tid) => ConfigurationUtil.setTenantId(config, tid)
+      case _ =>
+    }
+
     config
   }
 
   // Convert our PhoenixRDD to a DataFrame
   def toDataFrame(sqlContext: SQLContext): DataFrame = {
-    val columnList = PhoenixConfigurationUtil
+    val columnInfoList = PhoenixConfigurationUtil
       .getSelectColumnMetadataList(new Configuration(phoenixConf))
       .asScala
 
-    val columnNames: Seq[String] = columnList.map(ci => {
-      ci.getDisplayName
+    // Keep track of the sql type and column names.
+    val columns: Seq[(String, Int)] = columnInfoList.map(ci => {
+      (ci.getDisplayName, ci.getSqlType)
     })
 
+
     // Lookup the Spark catalyst types from the Phoenix schema
-    val structFields = phoenixSchemaToCatalystSchema(columnList).toArray
+    val structFields = phoenixSchemaToCatalystSchema(columnInfoList).toArray
 
     // Create the data frame from the converted Spark schema
     sqlContext.createDataFrame(map(pr => {
 
       // Create a sequence of column data
-      val rowSeq = columnNames.map { name =>
-        pr.resultMap(name)
+      val rowSeq = columns.map { case (name, sqlType) =>
+        val res = pr.resultMap(name)
+          // Special handling for data types
+          if (dateAsTimestamp && (sqlType == 91 || sqlType == 19) && res!=null) { // 91 is the defined type for Date and 19 for UNSIGNED_DATE
+            new java.sql.Timestamp(res.asInstanceOf[java.sql.Date].getTime)
+          } else if ((sqlType == 92 || sqlType == 18) && res!=null) { // 92 is the defined type for Time and 18 for UNSIGNED_TIME
+            new java.sql.Timestamp(res.asInstanceOf[java.sql.Time].getTime)
+          } else {
+            res
+          }
       }
 
       // Create a Spark Row from the sequence
@@ -124,25 +150,28 @@ class PhoenixRDD(sc: SparkContext, table: String, columns: Seq[String],
 
   def phoenixSchemaToCatalystSchema(columnList: Seq[ColumnInfo]) = {
     columnList.map(ci => {
-      val structType = phoenixTypeToCatalystType(ci.getPDataType)
+      val structType = phoenixTypeToCatalystType(ci)
       StructField(ci.getDisplayName, structType)
     })
   }
 
 
   // Lookup table for Phoenix types to Spark catalyst types
-  def phoenixTypeToCatalystType(phoenixType: PDataType[_]): DataType = phoenixType match {
+  def phoenixTypeToCatalystType(columnInfo: ColumnInfo): DataType = columnInfo.getPDataType match {
     case t if t.isInstanceOf[PVarchar] || t.isInstanceOf[PChar] => StringType
     case t if t.isInstanceOf[PLong] || t.isInstanceOf[PUnsignedLong] => LongType
     case t if t.isInstanceOf[PInteger] || t.isInstanceOf[PUnsignedInt] => IntegerType
+    case t if t.isInstanceOf[PSmallint] || t.isInstanceOf[PUnsignedSmallint] => ShortType
+    case t if t.isInstanceOf[PTinyint] || t.isInstanceOf[PUnsignedTinyint] => ByteType
     case t if t.isInstanceOf[PFloat] || t.isInstanceOf[PUnsignedFloat] => FloatType
     case t if t.isInstanceOf[PDouble] || t.isInstanceOf[PUnsignedDouble] => DoubleType
-    // TODO: support custom precision / scale.
     // Use Spark system default precision for now (explicit to work with < 1.5)
-    case t if t.isInstanceOf[PDecimal] => DecimalType(38, 18)
+    case t if t.isInstanceOf[PDecimal] => 
+      if (columnInfo.getPrecision == null || columnInfo.getPrecision < 0) DecimalType(38, 18) else DecimalType(columnInfo.getPrecision, columnInfo.getScale)
     case t if t.isInstanceOf[PTimestamp] || t.isInstanceOf[PUnsignedTimestamp] => TimestampType
     case t if t.isInstanceOf[PTime] || t.isInstanceOf[PUnsignedTime] => TimestampType
-    case t if t.isInstanceOf[PDate] || t.isInstanceOf[PUnsignedDate] => TimestampType
+    case t if (t.isInstanceOf[PDate] || t.isInstanceOf[PUnsignedDate]) && !dateAsTimestamp => DateType
+    case t if (t.isInstanceOf[PDate] || t.isInstanceOf[PUnsignedDate]) && dateAsTimestamp => TimestampType
     case t if t.isInstanceOf[PBoolean] => BooleanType
     case t if t.isInstanceOf[PVarbinary] || t.isInstanceOf[PBinary] => BinaryType
     case t if t.isInstanceOf[PIntegerArray] || t.isInstanceOf[PUnsignedIntArray] => ArrayType(IntegerType, containsNull = true)
@@ -154,8 +183,8 @@ class PhoenixRDD(sc: SparkContext, table: String, columns: Seq[String],
     case t if t.isInstanceOf[PTinyintArray] || t.isInstanceOf[PUnsignedTinyintArray] => ArrayType(ByteType, containsNull = true)
     case t if t.isInstanceOf[PFloatArray] || t.isInstanceOf[PUnsignedFloatArray] => ArrayType(FloatType, containsNull = true)
     case t if t.isInstanceOf[PDoubleArray] || t.isInstanceOf[PUnsignedDoubleArray] => ArrayType(DoubleType, containsNull = true)
-    // TODO: support custom precision / scale
-    case t if t.isInstanceOf[PDecimalArray] => { ArrayType(DecimalType(38, 18), containsNull = true) }
+    case t if t.isInstanceOf[PDecimalArray] => ArrayType(
+      if (columnInfo.getPrecision == null || columnInfo.getPrecision < 0) DecimalType(38, 18) else DecimalType(columnInfo.getPrecision, columnInfo.getScale), containsNull = true)
     case t if t.isInstanceOf[PTimestampArray] || t.isInstanceOf[PUnsignedTimestampArray] => ArrayType(TimestampType, containsNull = true)
     case t if t.isInstanceOf[PDateArray] || t.isInstanceOf[PUnsignedDateArray] => ArrayType(TimestampType, containsNull = true)
     case t if t.isInstanceOf[PTimeArray] || t.isInstanceOf[PUnsignedTimeArray] => ArrayType(TimestampType, containsNull = true)

@@ -109,19 +109,6 @@ public class MutableIndexReplicationIT extends BaseTest {
         setupDriver();
     }
 
-    @AfterClass
-    public static void tearDownAfterClass() throws Exception {
-        try {
-            destroyDriver(driver);
-        } finally {
-            try {
-                utility2.shutdownMiniCluster();
-            } finally {
-                utility1.shutdownMiniCluster();
-            }
-        }
-    }
-
     private static void setupConfigsAndStartCluster() throws Exception {
         // cluster-1 lives at regular HBase home, so we don't need to change how phoenix handles
         // lookups
@@ -180,7 +167,7 @@ public class MutableIndexReplicationIT extends BaseTest {
         // Must update config before starting server
         URL = getLocalClusterUrl(utility1);
         LOG.info("Connecting driver to "+URL);
-        driver = initAndRegisterDriver(URL, new ReadOnlyProps(props.entrySet().iterator()));
+        driver = initAndRegisterTestDriver(URL, new ReadOnlyProps(props.entrySet().iterator()));
     }
 
     @Test

@@ -95,17 +95,11 @@ public class QueryOptimizer {
         return plans.get(0);
     }
     
-    public List<QueryPlan> getBestPlan(PhoenixStatement statement, SelectStatement select, ColumnResolver resolver, List<? extends PDatum> targetColumns, ParallelIteratorFactory parallelIteratorFactory) throws SQLException {
-        return getApplicablePlans(statement, select, resolver, targetColumns, parallelIteratorFactory, true);
+    public List<QueryPlan> getBestPlan(QueryPlan dataPlan, PhoenixStatement statement, SelectStatement select, ColumnResolver resolver, List<? extends PDatum> targetColumns, ParallelIteratorFactory parallelIteratorFactory) throws SQLException {
+        return getApplicablePlans(dataPlan, statement, targetColumns, parallelIteratorFactory, true);
     }
     
-    public List<QueryPlan> getApplicablePlans(PhoenixStatement statement, SelectStatement select, ColumnResolver resolver, List<? extends PDatum> targetColumns, ParallelIteratorFactory parallelIteratorFactory) throws SQLException {
-        return getApplicablePlans(statement, select, resolver, targetColumns, parallelIteratorFactory, false);
-    }
-    
-    private List<QueryPlan> getApplicablePlans(PhoenixStatement statement, SelectStatement select, ColumnResolver resolver, List<? extends PDatum> targetColumns, ParallelIteratorFactory parallelIteratorFactory, boolean stopAtBestPlan) throws SQLException {
-        QueryCompiler compiler = new QueryCompiler(statement, select, resolver, targetColumns, parallelIteratorFactory, new SequenceManager(statement));
-        QueryPlan dataPlan = compiler.compile();
+    public List<QueryPlan> getApplicablePlans(QueryPlan dataPlan, PhoenixStatement statement, SelectStatement select, ColumnResolver resolver, List<? extends PDatum> targetColumns, ParallelIteratorFactory parallelIteratorFactory) throws SQLException {
         return getApplicablePlans(dataPlan, statement, targetColumns, parallelIteratorFactory, false);
     }
     
@@ -159,7 +153,7 @@ public class QueryOptimizer {
             }
         }
         
-        return hintedPlan == null ? orderPlansBestToWorst(select, plans) : plans;
+        return hintedPlan == null ? orderPlansBestToWorst(select, plans, stopAtBestPlan) : plans;
     }
     
     private static QueryPlan getHintedQueryPlan(PhoenixStatement statement, SelectStatement select, List<PTable> indexes, List<? extends PDatum> targetColumns, ParallelIteratorFactory parallelIteratorFactory, List<QueryPlan> plans) throws SQLException {
@@ -221,7 +215,8 @@ public class QueryOptimizer {
     
     private static QueryPlan addPlan(PhoenixStatement statement, SelectStatement select, PTable index, List<? extends PDatum> targetColumns, ParallelIteratorFactory parallelIteratorFactory, QueryPlan dataPlan, boolean isHinted) throws SQLException {
         int nColumns = dataPlan.getProjector().getColumnCount();
-        String alias = '"' + dataPlan.getTableRef().getTableAlias() + '"'; // double quote in case it's case sensitive
+        String tableAlias = dataPlan.getTableRef().getTableAlias();
+		String alias = tableAlias==null ? null : '"' + tableAlias + '"'; // double quote in case it's case sensitive
         String schemaName = index.getParentSchemaName().getString();
         schemaName = schemaName.length() == 0 ? null :  '"' + schemaName + '"';
 
@@ -235,7 +230,7 @@ public class QueryOptimizer {
         if (PIndexState.ACTIVE.equals(resolver.getTables().get(0).getTable().getIndexState())) {
             try {
             	// translate nodes that match expressions that are indexed to the associated column parse node
-                indexSelect = ParseNodeRewriter.rewrite(indexSelect, new  IndexExpressionParseNodeRewriter(index, statement.getConnection(), indexSelect.getUdfParseNodes()));
+                indexSelect = ParseNodeRewriter.rewrite(indexSelect, new  IndexExpressionParseNodeRewriter(index, null, statement.getConnection(), indexSelect.getUdfParseNodes()));
                 QueryCompiler compiler = new QueryCompiler(statement, indexSelect, resolver, targetColumns, parallelIteratorFactory, dataPlan.getContext().getSequenceManager(), isProjected);
                 
                 QueryPlan plan = compiler.compile();
@@ -254,7 +249,9 @@ public class QueryOptimizer {
                     if (plan.getProjector().getColumnCount() == nColumns) {
                         return plan;
                     } else if (index.getIndexType() == IndexType.GLOBAL) {
-                        throw new ColumnNotFoundException("*");
+                        String schemaNameStr = index.getSchemaName()==null?null:index.getSchemaName().getString();
+                        String tableNameStr = index.getTableName()==null?null:index.getTableName().getString();
+                        throw new ColumnNotFoundException(schemaNameStr, tableNameStr, null, "*");
                     }
                 }
             } catch (ColumnNotFoundException e) {
@@ -290,7 +287,7 @@ public class QueryOptimizer {
                             aliasedNodes.add(FACTORY.aliasedNode(null, indexColNode));
                             nodes.add(new ColumnParseNode(null, '"' + column.getName().getString() + '"'));
                         }
-                        SelectStatement innerSelect = FACTORY.select(indexSelect.getFrom(), indexSelect.getHint(), false, aliasedNodes, where, null, null, null, indexSelect.getLimit(), indexSelect.getBindCount(), false, indexSelect.hasSequence(), Collections.<SelectStatement>emptyList(), indexSelect.getUdfParseNodes());
+                        SelectStatement innerSelect = FACTORY.select(indexSelect.getFrom(), indexSelect.getHint(), false, aliasedNodes, where, null, null, null, null, null, indexSelect.getBindCount(), false, indexSelect.hasSequence(), Collections.<SelectStatement>emptyList(), indexSelect.getUdfParseNodes());
                         ParseNode outerWhere = FACTORY.in(nodes.size() == 1 ? nodes.get(0) : FACTORY.rowValueConstructor(nodes), FACTORY.subquery(innerSelect, false), false, true);
                         ParseNode extractedCondition = whereRewriter.getExtractedCondition();
                         if (extractedCondition != null) {
@@ -314,17 +311,20 @@ public class QueryOptimizer {
     /**
      * Order the plans among all the possible ones from best to worst.
      * Since we don't keep stats yet, we use the following simple algorithm:
-     * 1) If the query is a point lookup (i.e. we have a set of exact row keys), choose among those.
+     * 1) If the query is a point lookup (i.e. we have a set of exact row keys), choose that one immediately.
      * 2) If the query has an ORDER BY and a LIMIT, choose the plan that has all the ORDER BY expression
      * in the same order as the row key columns.
      * 3) If there are more than one plan that meets (1&2), choose the plan with:
-     *    a) the most row key columns that may be used to form the start/stop scan key.
+     *    a) the most row key columns that may be used to form the start/stop scan key (i.e. bound slots).
      *    b) the plan that preserves ordering for a group by.
-     *    c) the data table plan
+     *    c) the non local index table plan
+     * TODO: We should make more of a cost based choice: The largest number of bound slots does not necessarily
+     * correspond to the least bytes scanned. We could consider the slots bound for upper and lower ranges 
+     * separately, or we could calculate the bytes scanned between the start and stop row of each table.
      * @param plans the list of candidate plans
      * @return list of plans ordered from best to worst.
      */
-    private List<QueryPlan> orderPlansBestToWorst(SelectStatement select, List<QueryPlan> plans) {
+    private List<QueryPlan> orderPlansBestToWorst(SelectStatement select, List<QueryPlan> plans, boolean stopAtBestPlan) {
         final QueryPlan dataPlan = plans.get(0);
         if (plans.size() == 1) {
             return plans;
@@ -335,10 +335,14 @@ public class QueryOptimizer {
          * keys), then favor those first.
          */
         List<QueryPlan> candidates = Lists.newArrayListWithExpectedSize(plans.size());
-        for (QueryPlan plan : plans) {
-            if (plan.getContext().getScanRanges().isPointLookup()) {
-                candidates.add(plan);
+        if (stopAtBestPlan) { // If we're stopping at the best plan, only consider point lookups if there are any
+            for (QueryPlan plan : plans) {
+                if (plan.getContext().getScanRanges().isPointLookup()) {
+                    candidates.add(plan);
+                }
             }
+        } else {
+            candidates.addAll(plans);
         }
         /**
          * If we have a plan(s) that removes the order by, choose from among these,
@@ -381,38 +385,43 @@ public class QueryOptimizer {
             public int compare(QueryPlan plan1, QueryPlan plan2) {
                 PTable table1 = plan1.getTableRef().getTable();
                 PTable table2 = plan2.getTableRef().getTable();
+                int boundCount1 = plan1.getContext().getScanRanges().getBoundPkColumnCount();
+                int boundCount2 = plan2.getContext().getScanRanges().getBoundPkColumnCount();
                 // For shared indexes (i.e. indexes on views and local indexes),
                 // a) add back any view constants as these won't be in the index, and
                 // b) ignore the viewIndexId which will be part of the row key columns.
-                int c = (plan2.getContext().getScanRanges().getBoundPkColumnCount() + (table2.getViewIndexId() == null ? 0 : (boundRanges - 1))) - 
-                        (plan1.getContext().getScanRanges().getBoundPkColumnCount() + (table1.getViewIndexId() == null ? 0 : (boundRanges - 1)));
+                int c = (boundCount2 + (table2.getViewIndexId() == null ? 0 : (boundRanges - 1))) -
+                        (boundCount1 + (table1.getViewIndexId() == null ? 0 : (boundRanges - 1)));
                 if (c != 0) return c;
-                if (plan1.getGroupBy()!=null && plan2.getGroupBy()!=null) {
+                if (plan1.getGroupBy() != null && plan2.getGroupBy() != null) {
                     if (plan1.getGroupBy().isOrderPreserving() != plan2.getGroupBy().isOrderPreserving()) {
                         return plan1.getGroupBy().isOrderPreserving() ? -1 : 1;
-                    } 
+                    }
                 }
                 // Use smaller table (table with fewest kv columns)
                 c = (table1.getColumns().size() - table1.getPKColumns().size()) - (table2.getColumns().size() - table2.getPKColumns().size());
                 if (c != 0) return c;
-                
+
                 // If all things are equal, don't choose local index as it forces scan
                 // on every region (unless there's no start/stop key)
-                if (table1.getIndexType() == IndexType.LOCAL) {
+
+                if (table1.getIndexType() == IndexType.LOCAL && table2.getIndexType() !=
+                        IndexType.LOCAL) {
                     return plan1.getContext().getScanRanges().getRanges().isEmpty() ? -1 : 1;
                 }
-                if (table2.getIndexType() == IndexType.LOCAL) {
+                if (table2.getIndexType() == IndexType.LOCAL && table1.getIndexType() !=
+                        IndexType.LOCAL) {
                     return plan2.getContext().getScanRanges().getRanges().isEmpty() ? 1 : -1;
                 }
 
                 // All things being equal, just use the table based on the Hint.USE_DATA_OVER_INDEX_TABLE
-                if (table1.getType() == PTableType.INDEX) {
+
+                if (table1.getType() == PTableType.INDEX && table2.getType() != PTableType.INDEX) {
                     return comparisonOfDataVersusIndexTable;
                 }
-                if (table2.getType() == PTableType.INDEX) {
+                if (table2.getType() == PTableType.INDEX && table1.getType() != PTableType.INDEX) {
                     return -comparisonOfDataVersusIndexTable;
                 }
-                
                 return 0;
             }
             

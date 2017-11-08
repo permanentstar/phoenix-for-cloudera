@@ -23,12 +23,16 @@ import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.phoenix.hbase.index.util.KeyValueBuilder;
 import org.apache.phoenix.index.IndexMaintainer;
 import org.apache.phoenix.jdbc.PhoenixConnection;
-import org.apache.phoenix.schema.stats.PTableStats;
 
 public class DelegateTable implements PTable {
     @Override
     public long getTimeStamp() {
         return delegate.getTimeStamp();
+    }
+
+    @Override
+    public long getIndexDisableTimestamp() {
+        return delegate.getIndexDisableTimestamp();
     }
 
     @Override
@@ -92,8 +96,8 @@ public class DelegateTable implements PTable {
     }
 
     @Override
-    public PColumn getColumn(String name) throws ColumnNotFoundException, AmbiguousColumnException {
-        return delegate.getColumn(name);
+    public PColumn getColumnForColumnName(String name) throws ColumnNotFoundException, AmbiguousColumnException {
+        return delegate.getColumnForColumnName(name);
     }
 
     @Override
@@ -102,13 +106,13 @@ public class DelegateTable implements PTable {
     }
 
     @Override
-    public PRow newRow(KeyValueBuilder builder, long ts, ImmutableBytesWritable key, byte[]... values) {
-        return delegate.newRow(builder, ts, key, values);
+    public PRow newRow(KeyValueBuilder builder, long ts, ImmutableBytesWritable key, boolean hasOnDupKey, byte[]... values) {
+        return delegate.newRow(builder, ts, key, hasOnDupKey, values);
     }
 
     @Override
-    public PRow newRow(KeyValueBuilder builder, ImmutableBytesWritable key, byte[]... values) {
-        return delegate.newRow(builder, key, values);
+    public PRow newRow(KeyValueBuilder builder, ImmutableBytesWritable key, boolean hasOnDupKey, byte[]... values) {
+        return delegate.newRow(builder, key, hasOnDupKey, values);
     }
 
     @Override
@@ -162,8 +166,8 @@ public class DelegateTable implements PTable {
     }
 
     @Override
-    public void getIndexMaintainers(ImmutableBytesWritable ptr, PhoenixConnection connection) {
-        delegate.getIndexMaintainers(ptr, connection);
+    public boolean getIndexMaintainers(ImmutableBytesWritable ptr, PhoenixConnection connection) {
+        return delegate.getIndexMaintainers(ptr, connection);
     }
 
     @Override
@@ -221,11 +225,6 @@ public class DelegateTable implements PTable {
         return delegate.getIndexType();
     }
 
-    @Override
-    public PTableStats getTableStats() {
-        return delegate.getTableStats();
-    }
-
     private final PTable delegate;
 
     public DelegateTable(PTable delegate) {
@@ -235,6 +234,11 @@ public class DelegateTable implements PTable {
     @Override
     public PName getParentSchemaName() {
         return delegate.getParentSchemaName();
+    }
+
+    @Override
+    public boolean isTransactional() {
+        return delegate.isTransactional();
     }
 
     @Override
@@ -250,5 +254,65 @@ public class DelegateTable implements PTable {
     @Override
     public int getRowTimestampColPos() {
         return delegate.getRowTimestampColPos();
+    }
+    
+    @Override
+    public String toString() {
+        return delegate.toString();
+    }
+
+    @Override
+    public long getUpdateCacheFrequency() {
+        return delegate.getUpdateCacheFrequency();
+    }
+
+    @Override
+    public boolean isNamespaceMapped() {
+        return delegate.isNamespaceMapped();
+    }
+
+    @Override
+    public String getAutoPartitionSeqName() {
+        return delegate.getAutoPartitionSeqName();
+    }
+    
+    @Override
+    public boolean isAppendOnlySchema() {
+        return delegate.isAppendOnlySchema();
+    }
+    
+    @Override
+    public int hashCode() {
+        return delegate.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        return delegate.equals(obj);
+    }
+    
+    @Override
+    public ImmutableStorageScheme getImmutableStorageScheme() {
+        return delegate.getImmutableStorageScheme();
+    }
+
+    @Override
+    public PColumn getColumnForColumnQualifier(byte[] cf, byte[] cq) throws ColumnNotFoundException, AmbiguousColumnException {
+        return delegate.getColumnForColumnQualifier(cf, cq);
+    }
+
+    @Override
+    public EncodedCQCounter getEncodedCQCounter() {
+        return delegate.getEncodedCQCounter();
+    }
+
+    @Override
+    public QualifierEncodingScheme getEncodingScheme() {
+        return delegate.getEncodingScheme();
+    }
+
+    @Override
+    public boolean useStatsForParallelization() {
+        return delegate.useStatsForParallelization();
     }
 }

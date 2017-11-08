@@ -23,8 +23,10 @@ import java.util.Collections;
 import java.util.List;
 
 import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.util.Pair;
 import org.apache.phoenix.compile.GroupByCompiler.GroupBy;
 import org.apache.phoenix.compile.OrderByCompiler.OrderBy;
+import org.apache.phoenix.compile.QueryPlan;
 import org.apache.phoenix.compile.RowProjector;
 import org.apache.phoenix.compile.StatementContext;
 import org.apache.phoenix.coprocessor.BaseScannerRegionObserver;
@@ -35,12 +37,14 @@ import org.apache.phoenix.expression.OrderByExpression;
 import org.apache.phoenix.expression.RowKeyExpression;
 import org.apache.phoenix.expression.aggregator.Aggregators;
 import org.apache.phoenix.iterate.AggregatingResultIterator;
+import org.apache.phoenix.iterate.BaseResultIterators;
 import org.apache.phoenix.iterate.ConcatResultIterator;
 import org.apache.phoenix.iterate.DistinctAggregatingResultIterator;
 import org.apache.phoenix.iterate.FilterAggregatingResultIterator;
 import org.apache.phoenix.iterate.GroupedAggregatingResultIterator;
 import org.apache.phoenix.iterate.LimitingResultIterator;
 import org.apache.phoenix.iterate.MergeSortRowKeyResultIterator;
+import org.apache.phoenix.iterate.OffsetResultIterator;
 import org.apache.phoenix.iterate.OrderedAggregatingResultIterator;
 import org.apache.phoenix.iterate.OrderedResultIterator;
 import org.apache.phoenix.iterate.ParallelIteratorFactory;
@@ -48,17 +52,22 @@ import org.apache.phoenix.iterate.ParallelIterators;
 import org.apache.phoenix.iterate.ParallelScanGrouper;
 import org.apache.phoenix.iterate.PeekingResultIterator;
 import org.apache.phoenix.iterate.ResultIterator;
+import org.apache.phoenix.iterate.RowKeyOrderedAggregateResultIterator;
 import org.apache.phoenix.iterate.SequenceResultIterator;
+import org.apache.phoenix.iterate.SerialIterators;
 import org.apache.phoenix.iterate.SpoolingResultIterator;
 import org.apache.phoenix.iterate.UngroupedAggregatingResultIterator;
 import org.apache.phoenix.parse.FilterableStatement;
+import org.apache.phoenix.parse.HintNode;
 import org.apache.phoenix.query.KeyRange;
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.query.QueryServicesOptions;
+import org.apache.phoenix.schema.PTable.IndexType;
 import org.apache.phoenix.schema.TableRef;
 import org.apache.phoenix.schema.types.PInteger;
-
-
+import org.apache.phoenix.util.ScanUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  *
@@ -72,21 +81,30 @@ public class AggregatePlan extends BaseQueryPlan {
     private final Expression having;
     private List<KeyRange> splits;
     private List<List<Scan>> scans;
+    private static final Logger logger = LoggerFactory.getLogger(AggregatePlan.class);
+    private boolean isSerial;
 
-    public AggregatePlan(
-            StatementContext context, FilterableStatement statement, TableRef table, RowProjector projector,
-            Integer limit, OrderBy orderBy, ParallelIteratorFactory parallelIteratorFactory, GroupBy groupBy,
-            Expression having) {
-        this(context, statement, table, projector, limit, orderBy, parallelIteratorFactory, groupBy, having, null);
+    public AggregatePlan(StatementContext context, FilterableStatement statement, TableRef table,
+            RowProjector projector, Integer limit, Integer offset, OrderBy orderBy,
+            ParallelIteratorFactory parallelIteratorFactory, GroupBy groupBy, Expression having) throws SQLException {
+        this(context, statement, table, projector, limit, offset, orderBy, parallelIteratorFactory, groupBy, having,
+                null);
     }
-    
-    private AggregatePlan(
-            StatementContext context, FilterableStatement statement, TableRef table, RowProjector projector,
-            Integer limit, OrderBy orderBy, ParallelIteratorFactory parallelIteratorFactory, GroupBy groupBy,
-            Expression having, Expression dynamicFilter) {
-        super(context, statement, table, projector, context.getBindManager().getParameterMetaData(), limit, orderBy, groupBy, parallelIteratorFactory, dynamicFilter);
+
+    private AggregatePlan(StatementContext context, FilterableStatement statement, TableRef table,
+            RowProjector projector, Integer limit, Integer offset, OrderBy orderBy,
+            ParallelIteratorFactory parallelIteratorFactory, GroupBy groupBy, Expression having,
+            Expression dynamicFilter) throws SQLException {
+        super(context, statement, table, projector, context.getBindManager().getParameterMetaData(), limit, offset,
+                orderBy, groupBy, parallelIteratorFactory, dynamicFilter);
         this.having = having;
         this.aggregators = context.getAggregationManager().getAggregators();
+        boolean hasSerialHint = statement.getHint().hasHint(HintNode.Hint.SERIAL);
+        boolean canBeExecutedSerially = ScanUtil.canQueryBeExecutedSerially(table.getTable(), orderBy, context); 
+        if (hasSerialHint && !canBeExecutedSerially) {
+            logger.warn("This query cannot be executed serially. Ignoring the hint");
+        }
+        this.isSerial = hasSerialHint && canBeExecutedSerially;
     }
 
     public Expression getHaving() {
@@ -95,24 +113,38 @@ public class AggregatePlan extends BaseQueryPlan {
     
     @Override
     public List<KeyRange> getSplits() {
-        return splits;
+        if (splits == null)
+            return Collections.emptyList();
+        else
+            return splits;
     }
 
     @Override
     public List<List<Scan>> getScans() {
-        return scans;
+        if (scans == null)
+            return Collections.emptyList();
+        else
+            return scans;
     }
 
     private static class OrderingResultIteratorFactory implements ParallelIteratorFactory {
         private final QueryServices services;
+        private final OrderBy orderBy;
         
-        public OrderingResultIteratorFactory(QueryServices services) {
+        public OrderingResultIteratorFactory(QueryServices services,OrderBy orderBy) {
             this.services = services;
+            this.orderBy=orderBy;
         }
         @Override
-        public PeekingResultIterator newIterator(StatementContext context, ResultIterator scanner, Scan scan, String tableName) throws SQLException {
+        public PeekingResultIterator newIterator(StatementContext context, ResultIterator scanner, Scan scan, String tableName, QueryPlan plan) throws SQLException {
             Expression expression = RowKeyExpression.INSTANCE;
-            OrderByExpression orderByExpression = new OrderByExpression(expression, false, true);
+            boolean isNullsLast=false;
+            boolean isAscending=true;
+            if(this.orderBy==OrderBy.REV_ROW_KEY_ORDER_BY) {
+                isNullsLast=true; //which is needed for the whole rowKey.
+                isAscending=false;
+            }
+            OrderByExpression orderByExpression = new OrderByExpression(expression, isNullsLast, isAscending);
             int threshold = services.getProps().getInt(QueryServices.SPOOL_THRESHOLD_BYTES_ATTRIB, QueryServicesOptions.DEFAULT_SPOOL_THRESHOLD_BYTES);
             return new OrderedResultIterator(scanner, Collections.<OrderByExpression>singletonList(orderByExpression), threshold);
         }
@@ -127,9 +159,9 @@ public class AggregatePlan extends BaseQueryPlan {
             this.outerFactory = outerFactory;
         }
         @Override
-        public PeekingResultIterator newIterator(StatementContext context, ResultIterator scanner, Scan scan, String tableName) throws SQLException {
-            PeekingResultIterator iterator = innerFactory.newIterator(context, scanner, scan, tableName);
-            return outerFactory.newIterator(context, iterator, scan, tableName);
+        public PeekingResultIterator newIterator(StatementContext context, ResultIterator scanner, Scan scan, String tableName, QueryPlan plan) throws SQLException {
+            PeekingResultIterator iterator = innerFactory.newIterator(context, scanner, scan, tableName, plan);
+            return outerFactory.newIterator(context, iterator, scan, tableName, plan);
         }
     }
 
@@ -137,9 +169,13 @@ public class AggregatePlan extends BaseQueryPlan {
         ParallelIteratorFactory innerFactory;
         QueryServices services = context.getConnection().getQueryServices();
         if (groupBy.isEmpty() || groupBy.isOrderPreserving()) {
-            innerFactory = new SpoolingResultIterator.SpoolingResultIteratorFactory(services);
+            if (ScanUtil.isPacingScannersPossible(context)) {
+                innerFactory = ParallelIteratorFactory.NOOP_FACTORY;
+            } else {
+                innerFactory = new SpoolingResultIterator.SpoolingResultIteratorFactory(services);
+            }
         } else {
-            innerFactory = new OrderingResultIteratorFactory(services);
+            innerFactory = new OrderingResultIteratorFactory(services,this.getOrderBy());
         }
         if (parallelIteratorFactory == null) {
             return innerFactory;
@@ -149,12 +185,12 @@ public class AggregatePlan extends BaseQueryPlan {
     }
     
     @Override
-    protected ResultIterator newIterator(ParallelScanGrouper scanGrouper) throws SQLException {
+    protected ResultIterator newIterator(ParallelScanGrouper scanGrouper, Scan scan) throws SQLException {
         if (groupBy.isEmpty()) {
-            UngroupedAggregateRegionObserver.serializeIntoScan(context.getScan());
+            UngroupedAggregateRegionObserver.serializeIntoScan(scan);
         } else {
             // Set attribute with serialized expressions for coprocessor
-            GroupedAggregateRegionObserver.serializeIntoScan(context.getScan(), groupBy.getScanAttribName(), groupBy.getKeyExpressions());
+            GroupedAggregateRegionObserver.serializeIntoScan(scan, groupBy.getScanAttribName(), groupBy.getKeyExpressions());
             if (limit != null && orderBy.getOrderByExpressions().isEmpty() && having == null
                     && (  (   statement.isDistinct() && ! statement.isAggregate() )
                             || ( ! statement.isDistinct() && (   context.getAggregationManager().isEmpty()
@@ -180,19 +216,28 @@ public class AggregatePlan extends BaseQueryPlan {
                  *    order, so we can early exit, even when aggregate functions are used, as
                  *    the rows in the group are contiguous.
                  */
-                context.getScan().setAttribute(BaseScannerRegionObserver.GROUP_BY_LIMIT, PInteger.INSTANCE.toBytes(limit));
+                scan.setAttribute(BaseScannerRegionObserver.GROUP_BY_LIMIT,
+                        PInteger.INSTANCE.toBytes(limit + (offset == null ? 0 : offset)));
             }
         }
-        ParallelIterators parallelIterators = new ParallelIterators(this, null, wrapParallelIteratorFactory());
-        splits = parallelIterators.getSplits();
-        scans = parallelIterators.getScans();
+        BaseResultIterators iterators = isSerial
+                ? new SerialIterators(this, null, null, wrapParallelIteratorFactory(), scanGrouper, scan)
+                : new ParallelIterators(this, null, wrapParallelIteratorFactory(), scan, false);
+        estimatedRows = iterators.getEstimatedRowCount();
+        estimatedSize = iterators.getEstimatedByteCount();
+        splits = iterators.getSplits();
+        scans = iterators.getScans();
 
         AggregatingResultIterator aggResultIterator;
         // No need to merge sort for ungrouped aggregation
-        if (groupBy.isEmpty()) {
-            aggResultIterator = new UngroupedAggregatingResultIterator(new ConcatResultIterator(parallelIterators), aggregators);
+        if (groupBy.isEmpty() || groupBy.isUngroupedAggregate()) {
+            aggResultIterator = new UngroupedAggregatingResultIterator(new ConcatResultIterator(iterators), aggregators);
+        // If salted or local index we still need a merge sort as we'll potentially have multiple group by keys that aren't contiguous.
+        } else if (groupBy.isOrderPreserving() && !(this.getTableRef().getTable().getBucketNum() != null || this.getTableRef().getTable().getIndexType() == IndexType.LOCAL)) {
+            aggResultIterator = new RowKeyOrderedAggregateResultIterator(iterators, aggregators);
         } else {
-            aggResultIterator = new GroupedAggregatingResultIterator(new MergeSortRowKeyResultIterator(parallelIterators), aggregators);
+            aggResultIterator = new GroupedAggregatingResultIterator(
+                    new MergeSortRowKeyResultIterator(iterators, 0, this.getOrderBy() == OrderBy.REV_ROW_KEY_ORDER_BY),aggregators);
         }
 
         if (having != null) {
@@ -205,13 +250,17 @@ public class AggregatePlan extends BaseQueryPlan {
 
         ResultIterator resultScanner = aggResultIterator;
         if (orderBy.getOrderByExpressions().isEmpty()) {
+            if (offset != null) {
+                resultScanner = new OffsetResultIterator(aggResultIterator, offset);
+            }
             if (limit != null) {
-                resultScanner = new LimitingResultIterator(aggResultIterator, limit);
+                resultScanner = new LimitingResultIterator(resultScanner, limit);
             }
         } else {
             int thresholdBytes = context.getConnection().getQueryServices().getProps().getInt(
                     QueryServices.SPOOL_THRESHOLD_BYTES_ATTRIB, QueryServicesOptions.DEFAULT_SPOOL_THRESHOLD_BYTES);
-            resultScanner = new OrderedAggregatingResultIterator(aggResultIterator, orderBy.getOrderByExpressions(), thresholdBytes, limit);
+            resultScanner = new OrderedAggregatingResultIterator(aggResultIterator, orderBy.getOrderByExpressions(),
+                    thresholdBytes, limit, offset);
         }
         if (context.getSequenceManager().getSequenceCount() > 0) {
             resultScanner = new SequenceResultIterator(resultScanner, context.getSequenceManager());
@@ -223,4 +272,5 @@ public class AggregatePlan extends BaseQueryPlan {
     public boolean useRoundRobinIterator() throws SQLException {
         return false;
     }
+
 }

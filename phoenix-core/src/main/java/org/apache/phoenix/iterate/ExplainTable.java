@@ -37,6 +37,7 @@ import org.apache.phoenix.compile.ScanRanges;
 import org.apache.phoenix.compile.StatementContext;
 import org.apache.phoenix.coprocessor.BaseScannerRegionObserver;
 import org.apache.phoenix.filter.BooleanExpressionFilter;
+import org.apache.phoenix.filter.DistinctPrefixFilter;
 import org.apache.phoenix.parse.HintNode;
 import org.apache.phoenix.parse.HintNode.Hint;
 import org.apache.phoenix.query.KeyRange;
@@ -60,18 +61,21 @@ public abstract class ExplainTable {
     protected final OrderBy orderBy;
     protected final HintNode hint;
     protected final Integer limit;
+    protected final Integer offset;
    
     public ExplainTable(StatementContext context, TableRef table) {
-        this(context,table,GroupBy.EMPTY_GROUP_BY, OrderBy.EMPTY_ORDER_BY, HintNode.EMPTY_HINT_NODE, null);
+        this(context, table, GroupBy.EMPTY_GROUP_BY, OrderBy.EMPTY_ORDER_BY, HintNode.EMPTY_HINT_NODE, null, null);
     }
 
-    public ExplainTable(StatementContext context, TableRef table, GroupBy groupBy, OrderBy orderBy, HintNode hintNode, Integer limit) {
+    public ExplainTable(StatementContext context, TableRef table, GroupBy groupBy, OrderBy orderBy, HintNode hintNode,
+            Integer limit, Integer offset) {
         this.context = context;
         this.tableRef = table;
         this.groupBy = groupBy;
         this.orderBy = orderBy;
         this.hint = hintNode;
         this.limit = limit;
+        this.offset = offset;
     }
 
     private boolean explainSkipScan(StringBuilder buf) {
@@ -110,7 +114,7 @@ public abstract class ExplainTable {
             buf.append("TIMELINE-CONSISTENCY ");
         }
         if (hint.hasHint(Hint.SMALL)) {
-            buf.append("SMALL ");
+            buf.append(Hint.SMALL).append(" ");
         }
         if (OrderBy.REV_ROW_KEY_ORDER_BY.equals(orderBy)) {
             buf.append("REVERSE ");
@@ -120,23 +124,22 @@ public abstract class ExplainTable {
         } else {
             explainSkipScan(buf);
         }
-        buf.append("OVER " + tableRef.getTable().getPhysicalName().getString());
+        buf.append("OVER ").append(tableRef.getTable().getPhysicalName().getString());
         if (!scanRanges.isPointLookup()) {
             appendKeyRanges(buf);
         }
         planSteps.add(buf.toString());
-        System.out.println("Table row timestamp column position: " + tableRef.getTable().getRowTimestampColPos());
-        System.out.println("Table name:  " + tableRef.getTable().getName().getString());
         if (context.getScan() != null && tableRef.getTable().getRowTimestampColPos() != -1) {
             TimeRange range = context.getScan().getTimeRange();
             planSteps.add("    ROW TIMESTAMP FILTER [" + range.getMin() + ", " + range.getMax() + ")");
         }
         
+        PageFilter pageFilter = null;
+        FirstKeyOnlyFilter firstKeyOnlyFilter = null;
+        BooleanExpressionFilter whereFilter = null;
+        DistinctPrefixFilter distinctFilter = null;
         Iterator<Filter> filterIterator = ScanUtil.getFilterIterator(scan);
         if (filterIterator.hasNext()) {
-            PageFilter pageFilter = null;
-            FirstKeyOnlyFilter firstKeyOnlyFilter = null;
-            BooleanExpressionFilter whereFilter = null;
             do {
                 Filter filter = filterIterator.next();
                 if (filter instanceof FirstKeyOnlyFilter) {
@@ -145,18 +148,28 @@ public abstract class ExplainTable {
                     pageFilter = (PageFilter)filter;
                 } else if (filter instanceof BooleanExpressionFilter) {
                     whereFilter = (BooleanExpressionFilter)filter;
+                } else if (filter instanceof DistinctPrefixFilter) {
+                    distinctFilter = (DistinctPrefixFilter)filter;
                 }
             } while (filterIterator.hasNext());
-            if (whereFilter != null) {
-                planSteps.add("    SERVER FILTER BY " + (firstKeyOnlyFilter == null ? "" : "FIRST KEY ONLY AND ") + whereFilter.toString());
-            } else if (firstKeyOnlyFilter != null) {
-                planSteps.add("    SERVER FILTER BY FIRST KEY ONLY");
+        }
+        if (whereFilter != null) {
+            planSteps.add("    SERVER FILTER BY " + (firstKeyOnlyFilter == null ? "" : "FIRST KEY ONLY AND ") + whereFilter.toString());
+        } else if (firstKeyOnlyFilter != null) {
+            planSteps.add("    SERVER FILTER BY FIRST KEY ONLY");
+        }
+        if (distinctFilter != null) {
+            planSteps.add("    SERVER DISTINCT PREFIX FILTER OVER "+groupBy.getExpressions().toString());
+        }
+        if (!orderBy.getOrderByExpressions().isEmpty() && groupBy.isEmpty()) { // with GROUP BY, sort happens client-side
+            planSteps.add("    SERVER" + (limit == null ? "" : " TOP " + limit + " ROW" + (limit == 1 ? "" : "S"))
+                    + " SORTED BY " + orderBy.getOrderByExpressions().toString());
+        } else {
+            if (offset != null) {
+                planSteps.add("    SERVER OFFSET " + offset);
             }
-            if (!orderBy.getOrderByExpressions().isEmpty() && groupBy.isEmpty()) { // with GROUP BY, sort happens client-side
-                planSteps.add("    SERVER" + (limit == null ? "" : " TOP " + limit + " ROW" + (limit == 1 ? "" : "S"))
-                        + " SORTED BY " + orderBy.getOrderByExpressions().toString());
-            } else if (pageFilter != null) {
-                planSteps.add("    SERVER " + pageFilter.getPageSize() + " ROW LIMIT");                
+            if (pageFilter != null) {
+                planSteps.add("    SERVER " + pageFilter.getPageSize() + " ROW LIMIT");
             }
         }
         Integer groupByLimit = null;
@@ -170,7 +183,7 @@ public abstract class ExplainTable {
         }
     }
 
-    private void appendPKColumnValue(StringBuilder buf, byte[] range, Boolean isNull, int slotIndex) {
+    private void appendPKColumnValue(StringBuilder buf, byte[] range, Boolean isNull, int slotIndex, boolean changeViewIndexId) {
         if (Boolean.TRUE.equals(isNull)) {
             buf.append("null");
             return;
@@ -192,8 +205,14 @@ public abstract class ExplainTable {
             type.coerceBytes(ptr, type, sortOrder, SortOrder.getDefault());
             range = ptr.get();
         }
-        Format formatter = context.getConnection().getFormatter(type);
-        buf.append(type.toStringLiteral(range, formatter));
+        if (changeViewIndexId) {
+            Short s = (Short) type.toObject(range);
+            s = (short) (s + (-Short.MAX_VALUE));
+            buf.append(s.toString());
+        } else {
+            Format formatter = context.getConnection().getFormatter(type);
+            buf.append(type.toStringLiteral(range, formatter));
+        }
     }
     
     private static class RowKeyValueIterator implements Iterator<byte[]> {
@@ -251,6 +270,7 @@ public abstract class ExplainTable {
                 minMaxIterator = new RowKeyValueIterator(schema, minMaxRange.getRange(bound));
             }
         }
+        boolean isLocalIndex = ScanUtil.isLocalIndex(context.getScan());
         boolean forceSkipScan = this.hint.hasHint(Hint.SKIP_SCAN);
         int nRanges = forceSkipScan ? scanRanges.getRanges().size() : scanRanges.getBoundSlotCount();
         for (int i = 0, minPos = 0; minPos < nRanges || minMaxIterator.hasNext(); i++) {
@@ -269,7 +289,11 @@ public abstract class ExplainTable {
                     minMaxIterator = Iterators.emptyIterator();
                 }
             }
-            appendPKColumnValue(buf, b, isNull, i);
+            if (isLocalIndex && i == 0) {
+                appendPKColumnValue(buf, b, isNull, i, true);
+            } else {
+                appendPKColumnValue(buf, b, isNull, i, false);
+            }
             buf.append(',');
         }
     }

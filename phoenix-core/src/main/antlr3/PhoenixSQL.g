@@ -72,6 +72,7 @@ tokens
     COLUMN='column';
     SESSION='session';
     TABLE='table';
+    SCHEMA='schema';
     ADD='add';
     SPLIT='split';
     EXPLAIN='explain';
@@ -126,6 +127,22 @@ tokens
     LIST = 'list';
     JARS='jars';
     ROW_TIMESTAMP='row_timestamp';
+    USE='use';
+    OFFSET ='offset';
+    FETCH = 'fetch';
+    DECLARE = 'declare';
+    CURSOR = 'cursor';
+    OPEN = 'open';
+    CLOSE = 'close';
+    ROW = 'row';
+    ROWS = 'rows';
+    ONLY = 'only';
+    EXECUTE = 'execute';
+    UPGRADE = 'upgrade';
+    DEFAULT = 'default';
+    DUPLICATE = 'duplicate';
+    IGNORE = 'ignore';
+    IMMUTABLE = 'immutable';
 }
 
 
@@ -393,8 +410,13 @@ oneStatement returns [BindableStatement ret]
     |	s=upsert_node
     |   s=delete_node
     |   s=create_table_node
+    |   s=create_schema_node
     |   s=create_view_node
     |   s=create_index_node
+    |   s=cursor_open_node
+    |   s=cursor_close_node
+    |   s=cursor_fetch_node
+    |   s=declare_cursor_node
     |   s=drop_table_node
     |   s=drop_index_node
     |   s=alter_index_node
@@ -408,7 +430,10 @@ oneStatement returns [BindableStatement ret]
     |   s=alter_session_node
     |	s=create_sequence_node
     |	s=drop_sequence_node
+    |	s=drop_schema_node
+    |	s=use_schema_node
     |   s=update_statistics_node
+    |   s=execute_upgrade_node
     |   s=explain_node) { $ret = s; }
     ;
 finally{ contextStack.pop(); }
@@ -419,11 +444,17 @@ explain_node returns [BindableStatement ret]
 
 // Parse a create table statement.
 create_table_node returns [CreateTableStatement ret]
-    :   CREATE TABLE (IF NOT ex=EXISTS)? t=from_table_name 
+    :   CREATE (im=IMMUTABLE)? TABLE (IF NOT ex=EXISTS)? t=from_table_name 
         (LPAREN c=column_defs (pk=pk_constraint)? RPAREN)
         (p=fam_properties)?
         (SPLIT ON s=value_expression_list)?
-        {ret = factory.createTable(t, p, c, pk, s, PTableType.TABLE, ex!=null, null, null, getBindCount()); }
+        {ret = factory.createTable(t, p, c, pk, s, PTableType.TABLE, ex!=null, null, null, getBindCount(), im!=null ? true : null); }
+    ;
+   
+// Parse a create schema statement.
+create_schema_node returns [CreateSchemaStatement ret]
+    :   CREATE SCHEMA (IF NOT ex=EXISTS)? (DEFAULT | s=identifier)
+        {ret = factory.createSchema(s, ex!=null); }
     ;
 
 // Parse a create view statement.
@@ -434,7 +465,7 @@ create_view_node returns [CreateTableStatement ret]
           FROM bt=from_table_name
           (WHERE w=expression)? )?
         (p=fam_properties)?
-        { ret = factory.createTable(t, p, c, pk, null, PTableType.VIEW, ex!=null, bt==null ? t : bt, w, getBindCount()); }
+        { ret = factory.createTable(t, p, c, pk, null, PTableType.VIEW, ex!=null, bt==null ? t : bt, w, getBindCount(), null); }
     ;
 
 // Parse a create index statement.
@@ -509,7 +540,8 @@ fam_prop_name returns [PropertyName ret]
     ;
     
 prop_value returns [Object ret]
-    :   l=literal { $ret = l.getValue(); }
+    :   v=identifier { $ret = v; }
+    |   l=literal { $ret = l.getValue(); }
     ;
     
 column_name returns [ColumnName ret]
@@ -529,6 +561,12 @@ drop_table_node returns [DropTableStatement ret]
         {ret = factory.dropTable(t, v==null ? (QueryConstants.SYSTEM_SCHEMA_NAME.equals(t.getSchemaName()) ? PTableType.SYSTEM : PTableType.TABLE) : PTableType.VIEW, ex!=null, c!=null); }
     ;
 
+drop_schema_node returns [DropSchemaStatement ret]
+    :   DROP SCHEMA (IF ex=EXISTS)? s=identifier (c=CASCADE)?
+        {ret = factory.dropSchema(s, ex!=null, c!=null); }
+    ;
+
+
 // Parse a drop index statement
 drop_index_node returns [DropIndexStatement ret]
     : DROP INDEX (IF ex=EXISTS)? i=index_name ON t=from_table_name
@@ -537,8 +575,8 @@ drop_index_node returns [DropIndexStatement ret]
 
 // Parse a alter index statement
 alter_index_node returns [AlterIndexStatement ret]
-    : ALTER INDEX (IF ex=EXISTS)? i=index_name ON t=from_table_name s=(USABLE | UNUSABLE | REBUILD | DISABLE | ACTIVE)
-      {ret = factory.alterIndex(factory.namedTable(null, TableName.create(t.getSchemaName(), i.getName())), t.getTableName(), ex!=null, PIndexState.valueOf(SchemaUtil.normalizeIdentifier(s.getText()))); }
+    : ALTER INDEX (IF ex=EXISTS)? i=index_name ON t=from_table_name s=(USABLE | UNUSABLE | REBUILD | DISABLE | ACTIVE) (async=ASYNC)?
+      {ret = factory.alterIndex(factory.namedTable(null, TableName.create(t.getSchemaName(), i.getName())), t.getTableName(), ex!=null, PIndexState.valueOf(SchemaUtil.normalizeIdentifier(s.getText())), async!=null); }
     ;
 
 // Parse a trace statement.
@@ -547,7 +585,7 @@ trace_node returns [TraceStatement ret]
        {ret = factory.trace(Tracing.isTraceOn(flag.getText()), s == null ? Tracing.isTraceOn(flag.getText()) ? 1.0 : 0.0 : (((BigDecimal)s.getValue())).doubleValue());}
     ;
 
-// Parse a trace statement.
+// Parse a create function statement.
 create_function_node returns [CreateFunctionStatement ret]
     :   CREATE (OR replace=REPLACE)? (temp=TEMPORARY)? FUNCTION function=identifier 
        (LPAREN args=zero_or_more_data_types RPAREN)
@@ -596,6 +634,11 @@ update_statistics_node returns [UpdateStatisticsStatement ret]
 		{ret = factory.updateStatistics(factory.namedTable(null, t), s == null ? StatisticsCollectionScope.getDefault() : StatisticsCollectionScope.valueOf(SchemaUtil.normalizeIdentifier(s.getText())), p);}
 	;
 
+execute_upgrade_node returns [ExecuteUpgradeStatement ret]
+	:   EXECUTE UPGRADE
+		{ret = factory.executeUpgrade();}
+	;
+
 prop_name returns [String ret]
     :   p=identifier {$ret = SchemaUtil.normalizeIdentifier(p); }
     ;
@@ -611,12 +654,13 @@ column_defs returns [List<ColumnDef> ret]
 ;
 
 column_def returns [ColumnDef ret]
-    :   c=column_name dt=identifier (LPAREN l=NUMBER (COMMA s=NUMBER)? RPAREN)? ar=ARRAY? (lsq=LSQUARE (a=NUMBER)? RSQUARE)? (nn=NOT? n=NULL)? (pk=PRIMARY KEY (order=ASC|order=DESC)? rr=ROW_TIMESTAMP?)?
+    :   c=column_name dt=identifier (LPAREN l=NUMBER (COMMA s=NUMBER)? RPAREN)? ar=ARRAY? (lsq=LSQUARE (a=NUMBER)? RSQUARE)? (nn=NOT? n=NULL)? (DEFAULT df=expression)? (pk=PRIMARY KEY (order=ASC|order=DESC)? rr=ROW_TIMESTAMP?)?
         { $ret = factory.columnDef(c, dt, ar != null || lsq != null, a == null ? null :  Integer.parseInt( a.getText() ), nn!=null ? Boolean.FALSE : n!=null ? Boolean.TRUE : null, 
             l == null ? null : Integer.parseInt( l.getText() ),
             s == null ? null : Integer.parseInt( s.getText() ),
             pk != null, 
             order == null ? SortOrder.getDefault() : SortOrder.fromDDLValue(order.getText()),
+            df == null ? null : df.toString(),
             rr != null); }
     ;
 
@@ -657,7 +701,7 @@ single_select returns [SelectStatement ret]
         (WHERE where=expression)?
         (GROUP BY group=group_by)?
         (HAVING having=expression)?
-        { ParseContext context = contextStack.peek(); $ret = factory.select(from, h, d!=null, sel, where, group, having, null, null, getBindCount(), context.isAggregate(), context.hasSequences(), null, new HashMap<String,UDFParseNode>(udfParseNodes)); }
+        { ParseContext context = contextStack.peek(); $ret = factory.select(from, h, d!=null, sel, where, group, having, null, null,null, getBindCount(), context.isAggregate(), context.hasSequences(), null, new HashMap<String,UDFParseNode>(udfParseNodes)); }
     ;
 finally{ contextStack.pop(); }
 
@@ -672,7 +716,9 @@ select_node returns [SelectStatement ret]
     :   u=unioned_selects
         (ORDER BY order=order_by)?
         (LIMIT l=limit)?
-        { ParseContext context = contextStack.peek(); $ret = factory.select(u, order, l, getBindCount(), context.isAggregate()); }
+        (OFFSET o=offset (ROW | ROWS)?)?
+        (FETCH (FIRST | NEXT) (l=limit)? (ROW | ROWS) ONLY)?
+        { ParseContext context = contextStack.peek(); $ret = factory.select(u, order, l, o, getBindCount(), context.isAggregate()); }
     ;
 finally{ contextStack.pop(); }
 
@@ -680,16 +726,51 @@ finally{ contextStack.pop(); }
 upsert_node returns [UpsertStatement ret]
     :   UPSERT (hint=hintClause)? INTO t=from_table_name
         (LPAREN p=upsert_column_refs RPAREN)?
-        ((VALUES LPAREN v=one_or_more_expressions RPAREN) | s=select_node)
-        {ret = factory.upsert(factory.namedTable(null,t,p == null ? null : p.getFirst()), hint, p == null ? null : p.getSecond(), v, s, getBindCount(), new HashMap<String, UDFParseNode>(udfParseNodes)); }
+        ((VALUES LPAREN v=one_or_more_expressions RPAREN ( ON DUPLICATE KEY ( ig=IGNORE | ( UPDATE pairs=update_column_pairs ) ) )? ) | s=select_node)
+        {ret = factory.upsert(
+            factory.namedTable(null,t,p == null ? null : p.getFirst()), 
+            hint, p == null ? null : p.getSecond(), 
+            v, s, getBindCount(), 
+            new HashMap<String, UDFParseNode>(udfParseNodes),
+            ig != null ? Collections.<Pair<ColumnName,ParseNode>>emptyList() : pairs != null ? pairs : null); }
     ;
+  
+update_column_pairs returns [ List<Pair<ColumnName,ParseNode>> ret]
+@init{ret = new ArrayList<Pair<ColumnName,ParseNode>>(); }
+    :  p=update_column_pair { ret.add(p); }
+       (COMMA p=update_column_pair { ret.add(p); } )*
+;
 
+update_column_pair returns [ Pair<ColumnName,ParseNode> ret ]
+    :  c=column_name EQ e=expression { $ret = new Pair<ColumnName,ParseNode>(c,e); }
+;
+
+  
 upsert_column_refs returns [Pair<List<ColumnDef>,List<ColumnName>> ret]
 @init{ret = new Pair<List<ColumnDef>,List<ColumnName>>(new ArrayList<ColumnDef>(), new ArrayList<ColumnName>()); }
     :  d=dyn_column_name_or_def { if (d.getDataType()!=null) { $ret.getFirst().add(d); } $ret.getSecond().add(d.getColumnDefName()); } 
        (COMMA d=dyn_column_name_or_def { if (d.getDataType()!=null) { $ret.getFirst().add(d); } $ret.getSecond().add(d.getColumnDefName()); } )*
 ;
 	
+
+// Parse a full declare cursor expression structure.
+declare_cursor_node returns [DeclareCursorStatement ret]
+    :    DECLARE c=cursor_name CURSOR FOR s=select_node
+        {ret = factory.declareCursor(c, s); }
+    ;
+
+cursor_open_node returns [OpenStatement ret]
+    :    OPEN c=cursor_name {ret = factory.open(c);}
+    ;
+ 
+cursor_close_node returns [CloseStatement ret]
+    :    CLOSE c=cursor_name {ret = factory.close(c);}
+    ;
+
+cursor_fetch_node returns [FetchStatement ret]
+    :    FETCH NEXT (a=NUMBER)? (ROW|ROWS)? FROM c=cursor_name {ret = factory.fetch(c,true, a == null ? 1 :  Integer.parseInt( a.getText() )); }
+    ;
+
 // Parse a full delete expression structure.
 delete_node returns [DeleteStatement ret]
     :   DELETE (hint=hintClause)? FROM t=from_table_name
@@ -704,6 +785,11 @@ limit returns [LimitNode ret]
     | l=int_or_long_literal { $ret = factory.limit(l); }
     ;
     
+offset returns [OffsetNode ret]
+	: b=bind_expression { $ret = factory.offset(b); }
+    | l=int_or_long_literal { $ret = factory.offset(l); }
+    ;
+
 sampling_rate returns [LiteralParseNode ret]
     : l=literal { $ret = l; }
     ;
@@ -864,6 +950,11 @@ multiply_divide_modulo_expression returns [ParseNode ret]
         { $ret = lhs; }
     ;
 
+use_schema_node returns [UseSchemaStatement ret]
+	:   USE (DEFAULT | s=identifier)
+        {ret = factory.useSchema(s); }
+    ;
+
 negate_expression returns [ParseNode ret]
     :   m=MINUS? e=array_expression { $ret = m==null ? e : factory.negate(e); }
     ;
@@ -967,6 +1058,10 @@ value_expression_list returns [List<ParseNode> ret]
 
 index_name returns [NamedNode ret]
     :   name=identifier {$ret = factory.indexName(name); }
+    ;
+
+cursor_name returns [CursorName ret]
+    :   name=identifier {$ret = factory.cursorName(name);}
     ;
 
 // TODO: figure out how not repeat this two times
@@ -1188,7 +1283,8 @@ FIELDCHAR
     :    LETTER
     |    DIGIT
     |    '_'
-    |    '\u0080'..'\ufffe'
+    |    '\u0080'..'\u2001'
+    |    '\u2003'..'\ufffe'
     ;
 
 // A Letter is a lower or upper case ascii character.
@@ -1212,14 +1308,14 @@ DIGIT
 STRING_LITERAL
 @init{ StringBuilder sb = new StringBuilder(); }
     :   '\''
-    ( t=CHAR { sb.append(t.getText()); }
+    ( t=CHAR { sb.append(t.getText()); } 
     | t=CHAR_ESC { sb.append(getText()); }
     )* '\'' { setText(sb.toString()); }
     ;
 
 fragment
 CHAR
-    :   ( ~('\'' | '\\') )+
+    :   ( ~('\'' | '\\') )
     ;
 
 fragment
@@ -1241,13 +1337,14 @@ CHAR_ESC
         | '\\'  { setText("\\"); }
         | '_'   { setText("\\_"); }
         | '%'   { setText("\\\%"); }
+        |       { setText("\\"); }
         )
     |   '\'\''  { setText("\'"); }
     ;
 
 // whitespace (skip)
 WS
-    :   ( ' ' | '\t' ) { $channel=HIDDEN; }
+    :   ( ' ' | '\t' | '\u2002' ) { $channel=HIDDEN; }
     ;
     
 EOL

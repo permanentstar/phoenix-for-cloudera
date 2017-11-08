@@ -28,16 +28,14 @@
   <parent>
     <groupId>org.apache.phoenix</groupId>
     <artifactId>phoenix</artifactId>
-    <version>4.6.0-HBase-1.1-SNAPSHOT</version>
+    <version>4.11-cdh5.11.1</version>
   </parent>
   <artifactId>phoenix-spark</artifactId>
   <name>Phoenix - Spark</name>
 
   <properties>
-    <spark.version>1.5.0</spark.version>
-    <scala.version>2.10.4</scala.version>
-    <scala.binary.version>2.10</scala.binary.version>
     <top.dir>${project.basedir}/..</top.dir>
+    <!--<spark.version>2.2.0.cloudera1</spark.version>-->
   </properties>
 
   <dependencies>
@@ -61,6 +59,8 @@
       <version>${scala.version}</version>
       <scope>provided</scope>
     </dependency>
+
+
     <dependency>
       <groupId>org.apache.spark</groupId>
       <artifactId>spark-core_${scala.binary.version}</artifactId>
@@ -478,6 +478,12 @@
       <type>test-jar</type>
       <scope>test</scope>
     </dependency>
+    <dependency>
+        <groupId>org.apache.tephra</groupId>
+        <artifactId>tephra-core</artifactId>
+        <type>test-jar</type>
+        <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -549,6 +555,23 @@
               <parallel>true</parallel>
               <tagsToExclude>Integration-Test</tagsToExclude>
               <argLine>-Xmx1536m -XX:MaxPermSize=512m -XX:ReservedCodeCacheSize=512m</argLine>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>empty-javadoc-jar</id>
+            <phase>package</phase>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+            <configuration>
+              <classifier>javadoc</classifier>
+              <classesDirectory>${basedir}/javadoc</classesDirectory>
             </configuration>
           </execution>
         </executions>

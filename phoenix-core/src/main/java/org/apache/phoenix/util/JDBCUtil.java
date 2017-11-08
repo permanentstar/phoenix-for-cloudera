@@ -133,9 +133,19 @@ public class JDBCUtil {
         return (scnStr == null ? null : Long.parseLong(scnStr));
     }
 
+    public static Long getReplayAt(String url, Properties info) throws SQLException {
+        String scnStr = findProperty(url, info, PhoenixRuntime.REPLAY_AT_ATTRIB);
+        return (scnStr == null ? null : Long.parseLong(scnStr));
+    }
+
     public static int getMutateBatchSize(String url, Properties info, ReadOnlyProps props) throws SQLException {
         String batchSizeStr = findProperty(url, info, PhoenixRuntime.UPSERT_BATCH_SIZE_ATTRIB);
         return (batchSizeStr == null ? props.getInt(QueryServices.MUTATE_BATCH_SIZE_ATTRIB, QueryServicesOptions.DEFAULT_MUTATE_BATCH_SIZE) : Integer.parseInt(batchSizeStr));
+    }
+
+    public static long getMutateBatchSizeBytes(String url, Properties info, ReadOnlyProps props) throws SQLException {
+        String batchSizeStr = findProperty(url, info, PhoenixRuntime.UPSERT_BATCH_SIZE_BYTES_ATTRIB);
+        return (batchSizeStr == null ? props.getLong(QueryServices.MUTATE_BATCH_SIZE_BYTES_ATTRIB, QueryServicesOptions.DEFAULT_MUTATE_BATCH_SIZE_BYTES) : Long.parseLong(batchSizeStr));
     }
 
     public static @Nullable PName getTenantId(String url, Properties info) throws SQLException {
@@ -185,5 +195,10 @@ public class JDBCUtil {
     public static boolean isCollectingRequestLevelMetricsEnabled(String url, Properties overrideProps, ReadOnlyProps queryServicesProps) throws SQLException {
         String batchSizeStr = findProperty(url, overrideProps, PhoenixRuntime.REQUEST_METRIC_ATTRIB);
         return (batchSizeStr == null ? queryServicesProps.getBoolean(QueryServices.COLLECT_REQUEST_LEVEL_METRICS, QueryServicesOptions.DEFAULT_REQUEST_LEVEL_METRICS_ENABLED) : Boolean.parseBoolean(batchSizeStr));
+    }
+
+    public static String getSchema(String url, Properties info, String defaultValue) {
+        String schema = findProperty(url, info, PhoenixRuntime.SCHEMA_ATTRIB);
+        return (schema == null || schema.equals("")) ? defaultValue : schema;
     }
 }

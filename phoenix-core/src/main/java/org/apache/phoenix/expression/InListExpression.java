@@ -87,7 +87,7 @@ public class InListExpression extends BaseSingleExpression {
             }
         }
         if (coercedKeyExpressions.size() == 1) {
-            throw sqlE;
+            throw sqlE != null ? sqlE : new SQLException("Only one element in IN list");
         }
         if (coercedKeyExpressions.size() == 2 && addedNull) {
             return LiteralExpression.newConstant(null, PBoolean.INSTANCE, Determinism.ALWAYS);
@@ -175,7 +175,7 @@ public class InListExpression extends BaseSingleExpression {
     public int hashCode() {
         final int prime = 31;
         int result = 1;
-        result = prime * result + values.hashCode();
+        result = prime * result + children.hashCode() + values.hashCode();
         return result;
     }
 
@@ -185,7 +185,7 @@ public class InListExpression extends BaseSingleExpression {
         if (obj == null) return false;
         if (getClass() != obj.getClass()) return false;
         InListExpression other = (InListExpression)obj;
-        if (!values.equals(other.values)) return false;
+        if (!children.equals(other.children) || !values.equals(other.values)) return false;
         return true;
     }
 

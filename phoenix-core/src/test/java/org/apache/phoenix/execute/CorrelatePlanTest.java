@@ -17,6 +17,7 @@
  */
 package org.apache.phoenix.execute;
 
+import static org.apache.phoenix.query.QueryConstants.VALUE_COLUMN_FAMILY;
 import static org.apache.phoenix.util.PhoenixRuntime.CONNECTIONLESS;
 import static org.apache.phoenix.util.PhoenixRuntime.JDBC_PROTOCOL;
 import static org.apache.phoenix.util.PhoenixRuntime.JDBC_PROTOCOL_SEPARATOR;
@@ -36,12 +37,12 @@ import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.phoenix.compile.ColumnResolver;
 import org.apache.phoenix.compile.FromCompiler;
 import org.apache.phoenix.compile.JoinCompiler;
+import org.apache.phoenix.compile.OrderByCompiler.OrderBy;
 import org.apache.phoenix.compile.QueryPlan;
 import org.apache.phoenix.compile.RowProjector;
 import org.apache.phoenix.compile.SequenceManager;
 import org.apache.phoenix.compile.StatementContext;
 import org.apache.phoenix.compile.TupleProjectionCompiler;
-import org.apache.phoenix.compile.OrderByCompiler.OrderBy;
 import org.apache.phoenix.coprocessor.MetaDataProtocol;
 import org.apache.phoenix.exception.SQLExceptionCode;
 import org.apache.phoenix.expression.ComparisonExpression;
@@ -55,12 +56,16 @@ import org.apache.phoenix.jdbc.PhoenixStatement;
 import org.apache.phoenix.parse.JoinTableNode.JoinType;
 import org.apache.phoenix.parse.ParseNodeFactory;
 import org.apache.phoenix.parse.SelectStatement;
+import org.apache.phoenix.query.QueryConstants;
 import org.apache.phoenix.schema.ColumnRef;
 import org.apache.phoenix.schema.PColumn;
 import org.apache.phoenix.schema.PColumnImpl;
 import org.apache.phoenix.schema.PName;
 import org.apache.phoenix.schema.PNameFactory;
 import org.apache.phoenix.schema.PTable;
+import org.apache.phoenix.schema.PTable.EncodedCQCounter;
+import org.apache.phoenix.schema.PTable.QualifierEncodingScheme;
+import org.apache.phoenix.schema.PTable.ImmutableStorageScheme;
 import org.apache.phoenix.schema.PTableImpl;
 import org.apache.phoenix.schema.PTableType;
 import org.apache.phoenix.schema.TableRef;
@@ -172,21 +177,43 @@ public class CorrelatePlanTest {
                 {2, "2", "2", 20},
                 {5, "5", "5", 100},
         };
-        testCorrelatePlan(LEFT_RELATION, rightRelation, 1, 0, JoinType.Inner, expected);        
+        testCorrelatePlan(LEFT_RELATION, rightRelation, 1, 0, JoinType.Inner, expected);
     }
     
-    private void testCorrelatePlan(Object[][] leftRelation, Object[][] rightRelation, int leftCorrelColumn, int rightCorrelColumn, JoinType type, Object[][] expectedResult) throws SQLException {        
+    @Test
+    public void testCorrelatePlanWithSingleValueOnlyAndOffset() throws SQLException {
+        Integer offset = 1;
+        Object[][] rightRelation = new Object[][] {
+                {"6", 60},
+                {"2", 20},
+                {"5", 100},
+                {"1", 10},
+        };
+        Object[][] expected = new Object[][] {
+                {2, "2", "2", 20},
+                {5, "5", "5", 100},
+        };
+        testCorrelatePlan(LEFT_RELATION, rightRelation, 1, 0, JoinType.Inner, expected, offset);
+    }
+
+    private void testCorrelatePlan(Object[][] leftRelation, Object[][] rightRelation, int leftCorrelColumn, int rightCorrelColumn, JoinType type, Object[][] expectedResult) throws SQLException {
+        testCorrelatePlan(leftRelation, rightRelation, leftCorrelColumn, rightCorrelColumn, type, expectedResult, null);
+    }
+
+    private void testCorrelatePlan(Object[][] leftRelation, Object[][] rightRelation, int leftCorrelColumn,
+            int rightCorrelColumn, JoinType type, Object[][] expectedResult, Integer offset) throws SQLException {
         TableRef leftTable = createProjectedTableFromLiterals(leftRelation[0]);
         TableRef rightTable = createProjectedTableFromLiterals(rightRelation[0]);
         String varName = "$cor0";
         RuntimeContext runtimeContext = new RuntimeContextImpl();
         runtimeContext.defineCorrelateVariable(varName, leftTable);
-        QueryPlan leftPlan = newLiteralResultIterationPlan(leftRelation);
-        QueryPlan rightPlan = newLiteralResultIterationPlan(rightRelation);
+        QueryPlan leftPlan = newLiteralResultIterationPlan(leftRelation, offset);
+        QueryPlan rightPlan = newLiteralResultIterationPlan(rightRelation, offset);
         Expression columnExpr = new ColumnRef(rightTable, rightCorrelColumn).newColumnExpression();
         Expression fieldAccess = new CorrelateVariableFieldAccessExpression(runtimeContext, varName, new ColumnRef(leftTable, leftCorrelColumn).newColumnExpression());
         Expression filter = ComparisonExpression.create(CompareOp.EQUAL, Arrays.asList(columnExpr, fieldAccess), CONTEXT.getTempPtr(), false);
-        rightPlan = new ClientScanPlan(CONTEXT, SelectStatement.SELECT_ONE, rightTable, RowProjector.EMPTY_PROJECTOR, null, filter, OrderBy.EMPTY_ORDER_BY, rightPlan);
+        rightPlan = new ClientScanPlan(CONTEXT, SelectStatement.SELECT_ONE, rightTable, RowProjector.EMPTY_PROJECTOR,
+                null, null, filter, OrderBy.EMPTY_ORDER_BY, rightPlan);
         PTable joinedTable = JoinCompiler.joinProjectedTables(leftTable.getTable(), rightTable.getTable(), type);
         CorrelatePlan correlatePlan = new CorrelatePlan(leftPlan, rightPlan, varName, type, false, runtimeContext, joinedTable, leftTable.getTable(), rightTable.getTable(), leftTable.getTable().getColumns().size());
         ResultIterator iter = correlatePlan.iterator();
@@ -202,8 +229,8 @@ public class CorrelatePlanTest {
             }
         }
     }
-    
-    private QueryPlan newLiteralResultIterationPlan(Object[][] rows) {
+
+    private QueryPlan newLiteralResultIterationPlan(Object[][] rows, Integer offset) throws SQLException {
         List<Tuple> tuples = Lists.newArrayList();
         Tuple baseTuple = new SingleKeyValueTuple(KeyValue.LOWESTKEY);
         for (Object[] row : rows) {
@@ -215,7 +242,8 @@ public class CorrelatePlanTest {
             tuples.add(projector.projectResults(baseTuple));
         }
         
-        return new LiteralResultIterationPlan(tuples, CONTEXT, SelectStatement.SELECT_ONE, TableRef.EMPTY_TABLE_REF, RowProjector.EMPTY_PROJECTOR, null, OrderBy.EMPTY_ORDER_BY, null);
+        return new LiteralResultIterationPlan(tuples, CONTEXT, SelectStatement.SELECT_ONE, TableRef.EMPTY_TABLE_REF,
+                RowProjector.EMPTY_PROJECTOR, null, offset, OrderBy.EMPTY_ORDER_BY, null);
     }
 
 
@@ -224,16 +252,17 @@ public class CorrelatePlanTest {
         for (int i = 0; i < row.length; i++) {
             String name = ParseNodeFactory.createTempAlias();
             Expression expr = LiteralExpression.newConstant(row[i]);
-            columns.add(new PColumnImpl(PNameFactory.newName(name), PNameFactory.newName(TupleProjector.VALUE_COLUMN_FAMILY),
+            PName colName = PNameFactory.newName(name);
+            columns.add(new PColumnImpl(PNameFactory.newName(name), PNameFactory.newName(VALUE_COLUMN_FAMILY),
                     expr.getDataType(), expr.getMaxLength(), expr.getScale(), expr.isNullable(),
-                    i, expr.getSortOrder(), null, null, false, name, false));
+                    i, expr.getSortOrder(), null, null, false, name, false, false, colName.getBytes()));
         }
         try {
             PTable pTable = PTableImpl.makePTable(null, PName.EMPTY_NAME, PName.EMPTY_NAME,
                     PTableType.SUBQUERY, null, MetaDataProtocol.MIN_TABLE_TIMESTAMP, PTable.INITIAL_SEQ_NUM,
                     null, null, columns, null, null, Collections.<PTable>emptyList(),
                     false, Collections.<PName>emptyList(), null, null, false, false, false, null,
-                    null, null, true);
+                    null, null, true, false, 0, 0L, Boolean.FALSE, null, false, ImmutableStorageScheme.ONE_CELL_PER_COLUMN, QualifierEncodingScheme.NON_ENCODED_QUALIFIERS, EncodedCQCounter.NULL_COUNTER, true);
             TableRef sourceTable = new TableRef(pTable);
             List<ColumnRef> sourceColumnRefs = Lists.<ColumnRef> newArrayList();
             for (PColumn column : sourceTable.getTable().getColumns()) {

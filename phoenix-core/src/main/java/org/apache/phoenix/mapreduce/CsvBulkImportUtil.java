@@ -17,15 +17,14 @@
  */
 package org.apache.phoenix.mapreduce;
 
-import java.util.List;
-
-import com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.util.Base64;
 import org.apache.phoenix.mapreduce.util.PhoenixConfigurationUtil;
-import org.apache.phoenix.util.ColumnInfo;
+import org.apache.phoenix.query.QueryConstants;
+import org.apache.phoenix.query.QueryServices;
 
-import com.google.common.base.Preconditions;
+import com.google.common.annotations.VisibleForTesting;
 
 /**
  * Collection of utility methods for setting up bulk import jobs.
@@ -36,29 +35,23 @@ public class CsvBulkImportUtil {
      * Configure a job configuration for a bulk CSV import.
      *
      * @param conf job configuration to be set up
-     * @param tableName name of the table to be imported to, can include a schema name
      * @param fieldDelimiter field delimiter character for the CSV input
      * @param quoteChar quote character for the CSV input
      * @param escapeChar escape character for the CSV input
      * @param arrayDelimiter array delimiter character, can be null
-     * @param columnInfoList list of columns to be imported
-     * @param ignoreInvalidRows flag to ignore invalid input rows
+     * @param binaryEncoding 
      */
-    public static void initCsvImportJob(Configuration conf, String tableName, char fieldDelimiter, char quoteChar, char escapeChar,
-            String arrayDelimiter,  List<ColumnInfo> columnInfoList, boolean ignoreInvalidRows) {
-
-        Preconditions.checkNotNull(tableName);
-        Preconditions.checkNotNull(columnInfoList);
-        Preconditions.checkArgument(!columnInfoList.isEmpty(), "Column info list is empty");
-        conf.set(CsvToKeyValueMapper.TABLE_NAME_CONFKEY, tableName);
+    public static void initCsvImportJob(Configuration conf, char fieldDelimiter, char quoteChar,
+            char escapeChar, String arrayDelimiter, String binaryEncoding) {
         setChar(conf, CsvToKeyValueMapper.FIELD_DELIMITER_CONFKEY, fieldDelimiter);
         setChar(conf, CsvToKeyValueMapper.QUOTE_CHAR_CONFKEY, quoteChar);
         setChar(conf, CsvToKeyValueMapper.ESCAPE_CHAR_CONFKEY, escapeChar);
         if (arrayDelimiter != null) {
             conf.set(CsvToKeyValueMapper.ARRAY_DELIMITER_CONFKEY, arrayDelimiter);
         }
-        CsvToKeyValueMapper.configureColumnInfoList(conf, columnInfoList);
-        conf.setBoolean(CsvToKeyValueMapper.IGNORE_INVALID_ROW_CONFKEY, ignoreInvalidRows);
+        if(binaryEncoding!=null){
+            conf.set(QueryServices.UPLOAD_BINARY_DATA_TYPE_ENCODING, binaryEncoding);
+        }
     }
 
     /**
@@ -85,5 +78,10 @@ public class CsvBulkImportUtil {
             return null;
         }
         return new String(Base64.decode(strValue)).charAt(0);
+    }
+
+    public static Path getOutputPath(Path outputdir, String tableName) {
+        return new Path(outputdir,
+                tableName.replace(QueryConstants.NAMESPACE_SEPARATOR, QueryConstants.NAME_SEPARATOR));
     }
 }

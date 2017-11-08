@@ -32,10 +32,12 @@ import org.junit.Test;
 /**
  * End to end tests for {@link PowerFunction}
  */
-public class PowerFunctionEnd2EndIT extends BaseHBaseManagedTimeIT {
+public class PowerFunctionEnd2EndIT extends ParallelStatsDisabledIT {
 
     private static final String KEY = "key";
     private static final double ZERO = 1e-9;
+    private String signedTableName;
+    private String unsignedTableName;
 
     private static boolean twoDoubleEquals(double a, double b) {
         if (Double.isNaN(a) ^ Double.isNaN(b)) return false;
@@ -54,16 +56,18 @@ public class PowerFunctionEnd2EndIT extends BaseHBaseManagedTimeIT {
 
     @Before
     public void initTable() throws Exception {
+        signedTableName = generateUniqueName();
+        unsignedTableName = generateUniqueName();
         Connection conn = null;
         PreparedStatement stmt = null;
         try {
             conn = DriverManager.getConnection(getUrl());
             String ddl;
-            ddl =
-                    "CREATE TABLE testSigned (k VARCHAR NOT NULL PRIMARY KEY, doub DOUBLE, fl FLOAT, inte INTEGER, lon BIGINT, smalli SMALLINT, tinyi TINYINT)";
+            ddl = "CREATE TABLE " + signedTableName
+                + " (k VARCHAR NOT NULL PRIMARY KEY, doub DOUBLE, fl FLOAT, inte INTEGER, lon BIGINT, smalli SMALLINT, tinyi TINYINT)";
             conn.createStatement().execute(ddl);
-            ddl =
-                    "CREATE TABLE testUnsigned (k VARCHAR NOT NULL PRIMARY KEY, doub UNSIGNED_DOUBLE, fl UNSIGNED_FLOAT, inte UNSIGNED_INT, lon UNSIGNED_LONG, smalli UNSIGNED_SMALLINT, tinyi UNSIGNED_TINYINT)";
+            ddl = "CREATE TABLE " + unsignedTableName
+                + " (k VARCHAR NOT NULL PRIMARY KEY, doub UNSIGNED_DOUBLE, fl UNSIGNED_FLOAT, inte UNSIGNED_INT, lon UNSIGNED_LONG, smalli UNSIGNED_SMALLINT, tinyi UNSIGNED_TINYINT)";
             conn.createStatement().execute(ddl);
             conn.commit();
         } finally {
@@ -137,8 +141,8 @@ public class PowerFunctionEnd2EndIT extends BaseHBaseManagedTimeIT {
     public void test() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
         for (double d : new double[] { 0.0, 1.0, -1.0, 123.1234, -123.1234 }) {
-            testNumberSpec(conn, d, "testSigned");
-            if (d >= 0) testNumberSpec(conn, d, "testUnsigned");
+            testNumberSpec(conn, d, signedTableName);
+            if (d >= 0) testNumberSpec(conn, d, unsignedTableName);
         }
     }
 }

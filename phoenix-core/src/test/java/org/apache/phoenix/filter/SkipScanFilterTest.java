@@ -23,19 +23,18 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 
-import junit.framework.TestCase;
-
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.filter.Filter.ReturnCode;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.query.KeyRange;
 import org.apache.phoenix.query.QueryConstants;
-import org.apache.phoenix.schema.types.PChar;
-import org.apache.phoenix.schema.types.PDataType;
 import org.apache.phoenix.schema.PDatum;
-import org.apache.phoenix.schema.types.PVarchar;
 import org.apache.phoenix.schema.RowKeySchema.RowKeySchemaBuilder;
 import org.apache.phoenix.schema.SortOrder;
+import org.apache.phoenix.schema.types.PChar;
+import org.apache.phoenix.schema.types.PDataType;
+import org.apache.phoenix.schema.types.PInteger;
+import org.apache.phoenix.schema.types.PVarchar;
 import org.apache.phoenix.util.ByteUtil;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -44,6 +43,8 @@ import org.junit.runners.Parameterized.Parameters;
 
 import com.google.common.base.Function;
 import com.google.common.collect.Lists;
+
+import junit.framework.TestCase;
 
 //reset()
 //filterAllRemaining() -> true indicates scan is over, false, keep going on.
@@ -57,7 +58,7 @@ public class SkipScanFilterTest extends TestCase {
     private final List<List<KeyRange>> cnf;
     private final List<Expectation> expectations;
 
-    public SkipScanFilterTest(List<List<KeyRange>> cnf, int[] widths, List<Expectation> expectations) {
+    public SkipScanFilterTest(List<List<KeyRange>> cnf, int[] widths, int[] slotSpans,List<Expectation> expectations) {
         this.expectations = expectations;
         this.cnf = cnf;
         RowKeySchemaBuilder builder = new RowKeySchemaBuilder(widths.length);
@@ -92,20 +93,81 @@ public class SkipScanFilterTest extends TestCase {
                 
             }, width <= 0, SortOrder.getDefault());
         }
-        skipper = new SkipScanFilter(cnf, builder.build());
+        if(slotSpans==null) {
+            skipper = new SkipScanFilter(cnf, builder.build());
+        } else {
+            skipper = new SkipScanFilter(cnf, slotSpans,builder.build());
+        }
     }
 
     @Test
     public void test() throws IOException {
-        System.out.println("CNF: " + cnf + "\n" + "Expectations: " + expectations);
         for (Expectation expectation : expectations) {
             expectation.examine(skipper);
         }
     }
 
-    @Parameters(name="{0} {1} {2}")
+    @Parameters(name="{0} {1} {3}")
     public static Collection<Object> data() {
         List<Object> testCases = Lists.newArrayList();
+        // Variable length tests
+        testCases.addAll(
+                foreach(new KeyRange[][]{{
+                    PVarchar.INSTANCE.getKeyRange(Bytes.toBytes("a"), true, Bytes.toBytes("a"), true),
+                    PVarchar.INSTANCE.getKeyRange(Bytes.toBytes("e"), true, Bytes.toBytes("e"), true),
+                    PVarchar.INSTANCE.getKeyRange(Bytes.toBytes("f"), true, Bytes.toBytes("f"), true),
+                },
+                {
+                    PVarchar.INSTANCE.getKeyRange(Bytes.toBytes("b"), true, Bytes.toBytes("b"), true),
+                },
+                {
+                    KeyRange.EVERYTHING_RANGE,
+                },
+                {
+                    PVarchar.INSTANCE.getKeyRange(Bytes.toBytes("1"), true, Bytes.toBytes("1"), true),
+                }},
+                new int[4],
+                null,
+                new Include(ByteUtil.concat(Bytes.toBytes("a"),QueryConstants.SEPARATOR_BYTE_ARRAY, 
+                                            Bytes.toBytes("b"), QueryConstants.SEPARATOR_BYTE_ARRAY,
+                                            QueryConstants.SEPARATOR_BYTE_ARRAY,
+                                            Bytes.toBytes("1") ) ),
+                new SeekNext(ByteUtil.concat(Bytes.toBytes("e.f"),QueryConstants.SEPARATOR_BYTE_ARRAY, 
+                                             Bytes.toBytes("b"), QueryConstants.SEPARATOR_BYTE_ARRAY,
+                                             QueryConstants.SEPARATOR_BYTE_ARRAY,
+                                             Bytes.toBytes("1") ), 
+                            ByteUtil.concat(Bytes.toBytes("f"),QueryConstants.SEPARATOR_BYTE_ARRAY, 
+                                            Bytes.toBytes("b") )),
+                new Include(ByteUtil.concat(Bytes.toBytes("f"),QueryConstants.SEPARATOR_BYTE_ARRAY, 
+                                            Bytes.toBytes("b"), QueryConstants.SEPARATOR_BYTE_ARRAY,
+                                            QueryConstants.SEPARATOR_BYTE_ARRAY,
+                                            Bytes.toBytes("1") ) ) )
+        );
+        testCases.addAll(
+                foreach(new KeyRange[][]{{
+                    PVarchar.INSTANCE.getKeyRange(Bytes.toBytes("20160116121006"), true, Bytes.toBytes("20160116181006"), true),
+                },
+                {
+                    PVarchar.INSTANCE.getKeyRange(Bytes.toBytes("2404787"), true, Bytes.toBytes("2404787"), true),
+                }/*,
+                {
+                    KeyRange.EVERYTHING_RANGE,
+                },
+                {
+                    KeyRange.EVERYTHING_RANGE,
+                }*/},
+                new int[4],
+                null,
+                new SeekNext(ByteUtil.concat(Bytes.toBytes("20160116141006"),QueryConstants.SEPARATOR_BYTE_ARRAY, 
+                                            QueryConstants.SEPARATOR_BYTE_ARRAY,
+                                            Bytes.toBytes("servlet") ),
+                             ByteUtil.concat(Bytes.toBytes("20160116141006"),QueryConstants.SEPARATOR_BYTE_ARRAY, 
+                                             Bytes.toBytes("2404787") )),
+                new Include(ByteUtil.concat(Bytes.toBytes("20160116151006"),QueryConstants.SEPARATOR_BYTE_ARRAY, 
+                                            Bytes.toBytes("2404787"), QueryConstants.SEPARATOR_BYTE_ARRAY,
+                                            Bytes.toBytes("jdbc"), QueryConstants.SEPARATOR_BYTE_ARRAY ) ) )
+        );
+        // Fixed length tests
         testCases.addAll(
                 foreach(new KeyRange[][]{{
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("abc"), true, Bytes.toBytes("def"), true),
@@ -124,7 +186,7 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("AA"), true, Bytes.toBytes("AB"), false),
                 }},
                 new int[]{3,2,2,2,2},
-                //new SeekNext("abcABABABAB", "abdAAAAAAAA"),
+                null,
                 new SeekNext("defAAABABAB", "dzzAAAAAAAA"),
                 new Finished("xyyABABABAB"))
         );
@@ -133,6 +195,7 @@ public class SkipScanFilterTest extends TestCase {
                         PVarchar.INSTANCE.getKeyRange(Bytes.toBytes("j"), false, Bytes.toBytes("k"), true),
                     }},
                     new int[]{0},
+                    null,
                     new SeekNext(Bytes.toBytes("a"), ByteUtil.nextKey(new byte[] {'j',QueryConstants.SEPARATOR_BYTE})),
                     new Include("ja"),
                     new Include("jz"),
@@ -145,6 +208,7 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("abc"), true, Bytes.toBytes("def"), true)
                 }},
                 new int[]{3},
+                null,
                 new SeekNext("aab", "aac"),
                 new SeekNext("abb", "abc"),
                 new Include("abc"),
@@ -157,6 +221,7 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("abc"), false, Bytes.toBytes("def"), true)
                 }},
                 new int[]{3},
+                null,
                 new SeekNext("aba", "abd"),
                 new Include("abe"),
                 new Include("def"),
@@ -167,6 +232,7 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("abc"), false, Bytes.toBytes("def"), false)
                 }},
                 new int[]{3},
+                null,
                 new SeekNext("aba", "abd"),
                 new Finished("def"))
         );
@@ -176,6 +242,7 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("dzy"), false, Bytes.toBytes("xyz"), false),
                 }},
                 new int[]{3},
+                null,
                 new Include("def"),
                 new SeekNext("deg", "dzz"),
                 new Include("eee"),
@@ -193,6 +260,7 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("PO"), true, Bytes.toBytes("PP"), false),
                 }},
                 new int[]{3,2},
+                null,
                 new Include("abcAB"),
                 new SeekNext("abcAY","abcEB"),
                 new Include("abcEF"),
@@ -213,6 +281,7 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("def"), true, Bytes.toBytes("def"), true),
                 }},
                 new int[]{2,3},
+                null,
                 new Include("ABabc"),
                 new SeekNext("ABdeg","ACabc"),
                 new Include("AMabc"),
@@ -231,6 +300,7 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("def"), true, Bytes.toBytes("def"), true),
                 }},
                 new int[]{2,3},
+                null,
                 new Include("POdef"),
                 new Finished("POdeg"))
         );
@@ -242,6 +312,7 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("def"), true, Bytes.toBytes("def"), true),
                 }},
                 new int[]{2,3},
+                null,
                 new Include("POdef"))
         );
         testCases.addAll(
@@ -256,6 +327,7 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("PO"), true, Bytes.toBytes("PP"), false),
                 }},
                 new int[]{3,2},
+                null,
                 new SeekNext("aaaAA", "abcAB"),
                 new SeekNext("abcZZ", "abdAB"),
                 new SeekNext("abdZZ", "abeAB"),
@@ -284,6 +356,7 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("dzz"), true, Bytes.toBytes("xyz"), false),
                 }},
                 new int[]{3},
+                null,
                 new SeekNext("abb", "abc"),
                 new Include("abc"),
                 new Include("abe"),
@@ -304,35 +377,212 @@ public class SkipScanFilterTest extends TestCase {
                     PChar.INSTANCE.getKeyRange(Bytes.toBytes("700"), false, Bytes.toBytes("901"), false),
                 }},
                 new int[]{3,2,3},
+                null,
                 new SeekNext("abcEB700", "abcEB701"),
                 new Include("abcEB701"),
                 new SeekNext("dzzAB250", "dzzAB701"),
                 new Finished("zzzAA000"))
         );
-// TODO variable length columns
-//        testCases.addAll(
-//                foreach(new KeyRange[][]{{
-//                    Char.INSTANCE.getKeyRange(Bytes.toBytes("apple"), true, Bytes.toBytes("lemon"), true),
-//                    Char.INSTANCE.getKeyRange(Bytes.toBytes("pear"), false, Bytes.toBytes("yam"), false),
-//                },
-//                {
-//                    Char.INSTANCE.getKeyRange(Bytes.toBytes("AB"), true, Bytes.toBytes("AX"), true),
-//                    Char.INSTANCE.getKeyRange(Bytes.toBytes("EA"), false, Bytes.toBytes("EZ"), false),
-//                    Char.INSTANCE.getKeyRange(Bytes.toBytes("PO"), true, Bytes.toBytes("PP"), false),
-//                },
-//                {
-//                    Char.INSTANCE.getKeyRange(Bytes.toBytes("100"), true, Bytes.toBytes("250"), false),
-//                    Char.INSTANCE.getKeyRange(Bytes.toBytes("700"), false, Bytes.toBytes("901"), false),
-//                }},
-//                new int[]{3,3})
-//        );
+        //for PHOENIX-3705
+        testCases.addAll(
+                foreach(
+                    new KeyRange[][]{{
+                        PInteger.INSTANCE.getKeyRange(PInteger.INSTANCE.toBytes(1), true, PInteger.INSTANCE.toBytes(4), true)
+                    },
+                    {
+                        KeyRange.getKeyRange(PInteger.INSTANCE.toBytes(5)),
+                        KeyRange.getKeyRange(PInteger.INSTANCE.toBytes(7))
+                    },
+                    {
+                        PInteger.INSTANCE.getKeyRange(PInteger.INSTANCE.toBytes(9), true, PInteger.INSTANCE.toBytes(10), true)
+                    }},
+                    new int[]{4,4,4},
+                    null,
+                    new SeekNext(
+                            ByteUtil.concat(
+                                    PInteger.INSTANCE.toBytes(2),
+                                    PInteger.INSTANCE.toBytes(7),
+                                    PInteger.INSTANCE.toBytes(11)),
+                            ByteUtil.concat(
+                                    PInteger.INSTANCE.toBytes(3),
+                                    PInteger.INSTANCE.toBytes(5),
+                                    PInteger.INSTANCE.toBytes(9))),
+                    new Finished(ByteUtil.concat(
+                            PInteger.INSTANCE.toBytes(4),
+                            PInteger.INSTANCE.toBytes(7),
+                            PInteger.INSTANCE.toBytes(11))))
+        );
+        testCases.addAll(
+            foreach(
+                new KeyRange[][]{{
+                    KeyRange.getKeyRange(PInteger.INSTANCE.toBytes(1)),
+                    KeyRange.getKeyRange(PInteger.INSTANCE.toBytes(3)),
+                    KeyRange.getKeyRange(PInteger.INSTANCE.toBytes(4))
+                },
+                {
+                    KeyRange.getKeyRange(PInteger.INSTANCE.toBytes(5)),
+                    KeyRange.getKeyRange(PInteger.INSTANCE.toBytes(7))
+                },
+                {
+                    PInteger.INSTANCE.getKeyRange(PInteger.INSTANCE.toBytes(9), true, PInteger.INSTANCE.toBytes(10), true)
+                }},
+                new int[]{4,4,4},
+                null,
+                new SeekNext(
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(3),
+                                PInteger.INSTANCE.toBytes(7),
+                                PInteger.INSTANCE.toBytes(11)),
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(4),
+                                PInteger.INSTANCE.toBytes(5),
+                                PInteger.INSTANCE.toBytes(9))),
+                new Finished(ByteUtil.concat(
+                        PInteger.INSTANCE.toBytes(4),
+                        PInteger.INSTANCE.toBytes(7),
+                        PInteger.INSTANCE.toBytes(11))))
+        );
+        //for RVC
+        testCases.addAll(
+            foreach(
+                new KeyRange[][]{
+                {
+                    KeyRange.getKeyRange(
+                            ByteUtil.concat(PInteger.INSTANCE.toBytes(1),PInteger.INSTANCE.toBytes(2)),
+                            true,
+                            ByteUtil.concat(PInteger.INSTANCE.toBytes(3),PInteger.INSTANCE.toBytes(4)),
+                            true)
+                },
+                {
+                    KeyRange.getKeyRange(
+                            ByteUtil.concat(PInteger.INSTANCE.toBytes(5),PInteger.INSTANCE.toBytes(6)),
+                            true,
+                            ByteUtil.concat(PInteger.INSTANCE.toBytes(7),PInteger.INSTANCE.toBytes(8)),
+                            true)
+                }},
+                new int[]{4,4,4,4},
+                new int[]{1,1},
+                new Include(
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(2),
+                                PInteger.INSTANCE.toBytes(3),
+                                PInteger.INSTANCE.toBytes(6),
+                                PInteger.INSTANCE.toBytes(7))),
+                new SeekNext(
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(2),
+                                PInteger.INSTANCE.toBytes(3),
+                                PInteger.INSTANCE.toBytes(7),
+                                PInteger.INSTANCE.toBytes(9)),
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(2),
+                                PInteger.INSTANCE.toBytes(4),
+                                PInteger.INSTANCE.toBytes(5),
+                                PInteger.INSTANCE.toBytes(6))),
+                new Finished(
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(3),
+                                PInteger.INSTANCE.toBytes(4),
+                                PInteger.INSTANCE.toBytes(7),
+                                PInteger.INSTANCE.toBytes(9))))
+        );
+        testCases.addAll(
+            foreach(
+                new KeyRange[][]{
+                {
+                    KeyRange.getKeyRange(
+                            ByteUtil.concat(PInteger.INSTANCE.toBytes(1),PInteger.INSTANCE.toBytes(2)),
+                            true,
+                            ByteUtil.concat(PInteger.INSTANCE.toBytes(3),PInteger.INSTANCE.toBytes(4)),
+                            true)
+                },
+                {
+                    KeyRange.getKeyRange(PInteger.INSTANCE.toBytes(5)),
+                    KeyRange.getKeyRange(PInteger.INSTANCE.toBytes(7))
+                },
+                {
+                    PInteger.INSTANCE.getKeyRange(PInteger.INSTANCE.toBytes(9), true, PInteger.INSTANCE.toBytes(10), true)
+                }},
+                new int[]{4,4,4,4},
+                new int[]{1,0,0},
+                new Include(
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(1),
+                                PInteger.INSTANCE.toBytes(3),
+                                PInteger.INSTANCE.toBytes(5),
+                                PInteger.INSTANCE.toBytes(9))),
+                new SeekNext(
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(2),
+                                PInteger.INSTANCE.toBytes(3),
+                                PInteger.INSTANCE.toBytes(7),
+                                PInteger.INSTANCE.toBytes(11)),
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(2),
+                                PInteger.INSTANCE.toBytes(4),
+                                PInteger.INSTANCE.toBytes(5),
+                                PInteger.INSTANCE.toBytes(9))),
+                new Finished(
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(3),
+                                PInteger.INSTANCE.toBytes(4),
+                                PInteger.INSTANCE.toBytes(7),
+                                PInteger.INSTANCE.toBytes(11))))
+        );
+        testCases.addAll(
+            foreach(
+                new KeyRange[][]{
+                {
+                    KeyRange.getKeyRange(
+                            ByteUtil.concat(PInteger.INSTANCE.toBytes(1),PInteger.INSTANCE.toBytes(2)),
+                            true,
+                            ByteUtil.concat(PInteger.INSTANCE.toBytes(3),PInteger.INSTANCE.toBytes(4)),
+                            true)
+                },
+                {
+                    KeyRange.getKeyRange(ByteUtil.concat(PInteger.INSTANCE.toBytes(5),PInteger.INSTANCE.toBytes(6))),
+                    KeyRange.getKeyRange(ByteUtil.concat(PInteger.INSTANCE.toBytes(7),PInteger.INSTANCE.toBytes(8)))
+                },
+                {
+                    PInteger.INSTANCE.getKeyRange(PInteger.INSTANCE.toBytes(9), true, PInteger.INSTANCE.toBytes(10), true)
+                }},
+                new int[]{4,4,4,4,4},
+                new int[]{1,1,0},
+                new Include(
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(1),
+                                PInteger.INSTANCE.toBytes(3),
+                                PInteger.INSTANCE.toBytes(5),
+                                PInteger.INSTANCE.toBytes(6),
+                                PInteger.INSTANCE.toBytes(9))),
+                new SeekNext(
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(2),
+                                PInteger.INSTANCE.toBytes(3),
+                                PInteger.INSTANCE.toBytes(7),
+                                PInteger.INSTANCE.toBytes(8),
+                                PInteger.INSTANCE.toBytes(11)),
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(2),
+                                PInteger.INSTANCE.toBytes(4),
+                                PInteger.INSTANCE.toBytes(5),
+                                PInteger.INSTANCE.toBytes(6),
+                                PInteger.INSTANCE.toBytes(9))),
+                new Finished(
+                        ByteUtil.concat(
+                                PInteger.INSTANCE.toBytes(3),
+                                PInteger.INSTANCE.toBytes(4),
+                                PInteger.INSTANCE.toBytes(7),
+                                PInteger.INSTANCE.toBytes(8),
+                                PInteger.INSTANCE.toBytes(11))))
+        );
         return testCases;
     }
 
-    private static Collection<?> foreach(KeyRange[][] ranges, int[] widths, Expectation... expectations) {
+    private static Collection<?> foreach(KeyRange[][] ranges, int[] widths, int[] slotSpans, Expectation... expectations) {
         List<List<KeyRange>> cnf = Lists.transform(Lists.newArrayList(ranges), ARRAY_TO_LIST);
         List<Object> ret = Lists.newArrayList();
-        ret.add(new Object[] {cnf, widths, Arrays.asList(expectations)} );
+        ret.add(new Object[] {cnf, widths, slotSpans, Arrays.asList(expectations)} );
         return ret;
     }
 
@@ -378,13 +628,17 @@ public class SkipScanFilterTest extends TestCase {
             this.rowkey = Bytes.toBytes(rowkey);
         }
         
+        public Include(byte[] rowkey) {
+            this.rowkey = rowkey;
+        }
+        
         @SuppressWarnings("deprecation")
         @Override public void examine(SkipScanFilter skipper) throws IOException {
             KeyValue kv = KeyValue.createFirstOnRow(rowkey);
             skipper.reset();
             assertFalse(skipper.filterAllRemaining());
             assertFalse(skipper.filterRowKey(kv.getBuffer(), kv.getRowOffset(), kv.getRowLength()));
-            assertEquals(kv.toString(), ReturnCode.INCLUDE, skipper.filterKeyValue(kv));
+            assertEquals(kv.toString(), ReturnCode.INCLUDE_AND_NEXT_COL, skipper.filterKeyValue(kv));
         }
 
         @Override public String toString() {
@@ -396,6 +650,10 @@ public class SkipScanFilterTest extends TestCase {
         private final byte[] rowkey;
         public Finished(String rowkey) {
             this.rowkey = Bytes.toBytes(rowkey);
+        }
+
+        public Finished(byte[] rowkey) {
+            this.rowkey = rowkey;
         }
 
         @Override public void examine(SkipScanFilter skipper) throws IOException {

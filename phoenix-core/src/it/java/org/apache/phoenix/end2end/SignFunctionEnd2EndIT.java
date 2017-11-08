@@ -35,20 +35,26 @@ import org.junit.Test;
  * End to end tests for {@link SignFunction}
  * @since 4.0.0
  */
-public class SignFunctionEnd2EndIT extends BaseHBaseManagedTimeIT {
+public class SignFunctionEnd2EndIT extends ParallelStatsDisabledIT {
 
     private static final String KEY = "key";
+    private String signedTableName;
+    private String unsignedTableName;
 
     @Before
     public void initTable() throws Exception {
+        signedTableName = generateUniqueName();
+        unsignedTableName = generateUniqueName();
         Connection conn = null;
         PreparedStatement stmt = null;
         try {
             conn = DriverManager.getConnection(getUrl());
             String ddl;
-            ddl = "CREATE TABLE testSigned (k VARCHAR NOT NULL PRIMARY KEY, dec DECIMAL, doub DOUBLE, fl FLOAT, inte INTEGER, lon BIGINT, smalli SMALLINT, tinyi TINYINT)";
+            ddl = "CREATE TABLE " + signedTableName
+                + " (k VARCHAR NOT NULL PRIMARY KEY, \"DEC\" DECIMAL, doub DOUBLE, fl FLOAT, inte INTEGER, lon BIGINT, smalli SMALLINT, tinyi TINYINT)";
             conn.createStatement().execute(ddl);
-            ddl = "CREATE TABLE testUnsigned (k VARCHAR NOT NULL PRIMARY KEY, doub UNSIGNED_DOUBLE, fl UNSIGNED_FLOAT, inte UNSIGNED_INT, lon UNSIGNED_LONG, smalli UNSIGNED_SMALLINT, tinyi UNSIGNED_TINYINT)";
+            ddl = "CREATE TABLE " + unsignedTableName
+                + " (k VARCHAR NOT NULL PRIMARY KEY, doub UNSIGNED_DOUBLE, fl UNSIGNED_FLOAT, inte UNSIGNED_INT, lon UNSIGNED_LONG, smalli UNSIGNED_SMALLINT, tinyi UNSIGNED_TINYINT)";
             conn.createStatement().execute(ddl);
             conn.commit();
         } finally {
@@ -57,7 +63,8 @@ public class SignFunctionEnd2EndIT extends BaseHBaseManagedTimeIT {
     }
 
     private void updateSignedTable(Connection conn, double data) throws Exception {
-        PreparedStatement stmt = conn.prepareStatement("UPSERT INTO testSigned VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        PreparedStatement stmt = conn.prepareStatement(
+            "UPSERT INTO " + signedTableName + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
         stmt.setString(1, KEY);
         Double d = Double.valueOf(data);
         stmt.setBigDecimal(2, BigDecimal.valueOf(data));
@@ -72,7 +79,8 @@ public class SignFunctionEnd2EndIT extends BaseHBaseManagedTimeIT {
     }
 
     private void updateUnsignedTable(Connection conn, double data) throws Exception {
-        PreparedStatement stmt = conn.prepareStatement("UPSERT INTO testUnsigned VALUES (?, ?, ?, ?, ?, ?, ?)");
+        PreparedStatement stmt = conn.prepareStatement(
+            "UPSERT INTO " + unsignedTableName + " VALUES (?, ?, ?, ?, ?, ?, ?)");
         stmt.setString(1, KEY);
         Double d = Double.valueOf(data);
         stmt.setDouble(2, d.doubleValue());
@@ -87,14 +95,17 @@ public class SignFunctionEnd2EndIT extends BaseHBaseManagedTimeIT {
 
     private void testSignedNumberSpec(Connection conn, double data, int expected) throws Exception {
         updateSignedTable(conn, data);
-        ResultSet rs = conn.createStatement().executeQuery("SELECT SIGN(dec),SIGN(doub),SIGN(fl),SIGN(inte),SIGN(lon),SIGN(smalli),SIGN(tinyi) FROM testSigned");
+        ResultSet rs = conn.createStatement().executeQuery(
+            "SELECT SIGN(\"DEC\"),SIGN(doub),SIGN(fl),SIGN(inte),SIGN(lon),SIGN(smalli),SIGN(tinyi) FROM "
+                + signedTableName);
         assertTrue(rs.next());
         for (int i = 1; i <= 7; ++i) {
             assertEquals(rs.getInt(i), expected);
         }
         assertTrue(!rs.next());
 
-        PreparedStatement stmt = conn.prepareStatement("SELECT k FROM testSigned WHERE SIGN(dec)=? AND SIGN(doub)=? AND SIGN(fl)=? AND SIGN(inte)=? AND SIGN(lon)=? AND SIGN(smalli)=? AND SIGN(tinyi)=?");
+        PreparedStatement stmt = conn.prepareStatement("SELECT k FROM " + signedTableName
+            + " WHERE SIGN(\"DEC\")=? AND SIGN(doub)=? AND SIGN(fl)=? AND SIGN(inte)=? AND SIGN(lon)=? AND SIGN(smalli)=? AND SIGN(tinyi)=?");
         for (int i = 1; i <= 7; ++i)
             stmt.setInt(i, expected);
         rs = stmt.executeQuery();
@@ -105,14 +116,17 @@ public class SignFunctionEnd2EndIT extends BaseHBaseManagedTimeIT {
 
     private void testUnsignedNumberSpec(Connection conn, double data, int expected) throws Exception {
         updateUnsignedTable(conn, data);
-        ResultSet rs = conn.createStatement().executeQuery("SELECT SIGN(doub),SIGN(fl),SIGN(inte),SIGN(lon),SIGN(smalli),SIGN(tinyi) FROM testUnsigned");
+        ResultSet rs = conn.createStatement().executeQuery(
+            "SELECT SIGN(doub),SIGN(fl),SIGN(inte),SIGN(lon),SIGN(smalli),SIGN(tinyi) FROM "
+                + unsignedTableName);
         assertTrue(rs.next());
         for (int i = 1; i <= 6; ++i) {
             assertEquals(rs.getInt(i), expected);
         }
         assertTrue(!rs.next());
 
-        PreparedStatement stmt = conn.prepareStatement("SELECT k FROM testUnsigned WHERE SIGN(doub)=? AND SIGN(fl)=? AND SIGN(inte)=? AND SIGN(lon)=? AND SIGN(smalli)=? AND SIGN(tinyi)=?");
+        PreparedStatement stmt = conn.prepareStatement("SELECT k FROM " + unsignedTableName
+            + " WHERE SIGN(doub)=? AND SIGN(fl)=? AND SIGN(inte)=? AND SIGN(lon)=? AND SIGN(smalli)=? AND SIGN(tinyi)=?");
         for (int i = 1; i <= 6; ++i)
             stmt.setInt(i, expected);
         rs = stmt.executeQuery();

@@ -17,17 +17,27 @@
  */
 package org.apache.phoenix.expression.function;
 
+import java.sql.Date;
 import java.sql.SQLException;
 import java.util.List;
 
-import com.google.common.collect.Lists;
+import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.phoenix.expression.CoerceExpression;
 import org.apache.phoenix.expression.Expression;
-import org.apache.phoenix.schema.types.PDate;
+import org.apache.phoenix.expression.LiteralExpression;
+import org.apache.phoenix.parse.FunctionParseNode.Argument;
+import org.apache.phoenix.parse.FunctionParseNode.BuiltInFunction;
+import org.apache.phoenix.parse.FunctionParseNode.FunctionClassType;
+import org.apache.phoenix.schema.tuple.Tuple;
 import org.apache.phoenix.schema.types.PDataType;
+import org.apache.phoenix.schema.types.PDate;
+import org.apache.phoenix.schema.types.PInteger;
 import org.apache.phoenix.schema.types.PTimestamp;
 import org.apache.phoenix.schema.types.PUnsignedDate;
 import org.apache.phoenix.schema.types.PUnsignedTimestamp;
+import org.apache.phoenix.schema.types.PVarchar;
+
+import com.google.common.collect.Lists;
 
 /**
  * 
@@ -37,11 +47,19 @@ import org.apache.phoenix.schema.types.PUnsignedTimestamp;
  * 
  * @since 3.0.0
  */
+@BuiltInFunction(name = FloorFunction.NAME,
+         args = {
+                 @Argument(allowedTypes={PTimestamp.class}),
+                 @Argument(allowedTypes={PVarchar.class, PInteger.class}, defaultValue = "null", isConstant=true),
+                 @Argument(allowedTypes={PInteger.class}, defaultValue="1", isConstant=true)
+         },
+         classType = FunctionClassType.DERIVED
+        )
 public class FloorDateExpression extends RoundDateExpression {
     
     public FloorDateExpression() {}
     
-    private FloorDateExpression(List<Expression> children) {
+    public FloorDateExpression(List<Expression> children) {
         super(children);
     }
     
@@ -55,7 +73,20 @@ public class FloorDateExpression extends RoundDateExpression {
             newChildren.addAll(children.subList(1, children.size()));
             children = newChildren;
         }
-        return new FloorDateExpression(children);
+       
+        Object timeUnitValue = ((LiteralExpression)children.get(1)).getValue();
+        TimeUnit timeUnit = TimeUnit.getTimeUnit(timeUnitValue != null ? timeUnitValue.toString() : null);
+        switch(timeUnit) {
+        case WEEK:
+             return new FloorWeekExpression(children);
+        case MONTH:
+             return new FloorMonthExpression(children);
+        case YEAR:
+             return new FloorYearExpression(children);
+         default:
+             return new FloorDateExpression(children);
+        }
+        
     }
     
     /**
@@ -86,5 +117,22 @@ public class FloorDateExpression extends RoundDateExpression {
     @Override
     public String getName() {
         return FloorFunction.NAME;
+    }
+    
+    @Override
+    public boolean evaluate(Tuple tuple, ImmutableBytesWritable ptr) {
+        if (children.get(0).evaluate(tuple, ptr)) {
+            if (ptr.getLength()==0) {
+                return true;
+            }
+            PDataType dataType = getDataType();
+            long time = dataType.getCodec().decodeLong(ptr, children.get(0).getSortOrder());
+            long value = roundTime(time);
+            Date d = new Date(value);
+            byte[] byteValue = dataType.toBytes(d);
+            ptr.set(byteValue);
+            return true;
+        }
+        return false;
     }
 }

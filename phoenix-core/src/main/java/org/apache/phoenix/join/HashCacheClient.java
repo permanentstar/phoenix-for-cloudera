@@ -39,6 +39,7 @@ import org.apache.phoenix.query.QueryServicesOptions;
 import org.apache.phoenix.schema.TableRef;
 import org.apache.phoenix.schema.tuple.Tuple;
 import org.apache.phoenix.schema.types.PDataType;
+import org.apache.phoenix.util.ByteUtil;
 import org.apache.phoenix.util.ServerUtil;
 import org.apache.phoenix.util.TrustedByteArrayOutputStream;
 import org.apache.phoenix.util.TupleUtil;
@@ -80,7 +81,7 @@ public class HashCacheClient  {
          */
         ImmutableBytesWritable ptr = new ImmutableBytesWritable();
         serialize(ptr, iterator, estimatedSize, onExpressions, singleValueOnly, keyRangeRhsExpression, keyRangeRhsValues);
-        return serverCache.addServerCache(keyRanges, ptr, new HashCacheFactory(), cacheUsingTableRef);
+        return serverCache.addServerCache(keyRanges, ptr, ByteUtil.EMPTY_BYTE_ARRAY, new HashCacheFactory(), cacheUsingTableRef);
     }
     
     private void serialize(ImmutableBytesWritable ptr, ResultIterator iterator, long estimatedSize, List<Expression> onExpressions, boolean singleValueOnly, Expression keyRangeRhsExpression, List<Expression> keyRangeRhsValues) throws SQLException {
@@ -157,7 +158,7 @@ public class HashCacheClient  {
             PDataType type = keyExpression.getDataType();
             keyExpression.reset();
             if (keyExpression.evaluate(tuple, ptr)) {
-                return LiteralExpression.newConstant(type.toObject(ptr), type);
+                return LiteralExpression.newConstant(type.toObject(ptr, keyExpression.getSortOrder()), type);
             }
             
             return LiteralExpression.newConstant(null, type);
@@ -169,7 +170,7 @@ public class HashCacheClient  {
             PDataType type = child.getDataType();
             child.reset();
             if (child.evaluate(tuple, ptr)) {
-                values.add(LiteralExpression.newConstant(type.toObject(ptr), type));
+                values.add(LiteralExpression.newConstant(type.toObject(ptr, child.getSortOrder()), type));
             } else {
                 values.add(LiteralExpression.newConstant(null, type));
             }

@@ -20,7 +20,6 @@ package org.apache.phoenix.filter;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -29,11 +28,12 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
+import com.google.common.base.Predicate;
+import com.google.common.collect.Iterables;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValue.Type;
-import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.filter.FilterBase;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -41,7 +41,7 @@ import org.apache.hadoop.hbase.util.Writables;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableUtils;
 import org.apache.phoenix.hbase.index.util.ImmutableBytesPtr;
-import org.apache.phoenix.query.QueryConstants;
+import org.apache.phoenix.util.EncodedColumnsUtil;
 
 /**
  * When selecting specific columns in a SELECT query, this filter passes only selected columns
@@ -54,6 +54,8 @@ public class ColumnProjectionFilter extends FilterBase implements Writable {
     private byte[] emptyCFName;
     private Map<ImmutableBytesPtr, NavigableSet<ImmutableBytesPtr>> columnsTracker;
     private Set<byte[]> conditionOnlyCfs;
+    private boolean usesEncodedColumnNames;
+    private byte[] emptyKVQualifier;
 
     public ColumnProjectionFilter() {
 
@@ -61,12 +63,15 @@ public class ColumnProjectionFilter extends FilterBase implements Writable {
 
     public ColumnProjectionFilter(byte[] emptyCFName,
             Map<ImmutableBytesPtr, NavigableSet<ImmutableBytesPtr>> columnsTracker,
-            Set<byte[]> conditionOnlyCfs) {
+            Set<byte[]> conditionOnlyCfs, boolean usesEncodedColumnNames) {
         this.emptyCFName = emptyCFName;
         this.columnsTracker = columnsTracker;
         this.conditionOnlyCfs = conditionOnlyCfs;
+        this.usesEncodedColumnNames = usesEncodedColumnNames;
+        this.emptyKVQualifier = EncodedColumnsUtil.getEmptyKeyValueInfo(usesEncodedColumnNames).getFirst();
     }
 
+    @Override
     public void readFields(DataInput input) throws IOException {
         this.emptyCFName = WritableUtils.readCompressedByteArray(input);
         int familyMapSize = WritableUtils.readVInt(input);
@@ -87,6 +92,9 @@ public class ColumnProjectionFilter extends FilterBase implements Writable {
             familyMapSize--;
         }
         int conditionOnlyCfsSize = WritableUtils.readVInt(input);
+        usesEncodedColumnNames = conditionOnlyCfsSize > 0;
+        emptyKVQualifier = EncodedColumnsUtil.getEmptyKeyValueInfo(usesEncodedColumnNames).getFirst();
+        conditionOnlyCfsSize = Math.abs(conditionOnlyCfsSize) - 1; // restore to the actual value.
         this.conditionOnlyCfs = new TreeSet<byte[]>(Bytes.BYTES_COMPARATOR);
         while (conditionOnlyCfsSize > 0) {
             this.conditionOnlyCfs.add(WritableUtils.readCompressedByteArray(input));
@@ -94,6 +102,7 @@ public class ColumnProjectionFilter extends FilterBase implements Writable {
         }
     }
 
+    @Override
     public void write(DataOutput output) throws IOException {
         WritableUtils.writeCompressedByteArray(output, this.emptyCFName);
         WritableUtils.writeVInt(output, this.columnsTracker.size());
@@ -109,12 +118,13 @@ public class ColumnProjectionFilter extends FilterBase implements Writable {
                 }
             }
         }
-        // Write conditionOnlyCfs
-        WritableUtils.writeVInt(output, this.conditionOnlyCfs.size());
+        // Encode usesEncodedColumnNames in conditionOnlyCfs size.
+        WritableUtils.writeVInt(output, (this.conditionOnlyCfs.size() + 1) * (usesEncodedColumnNames ? 1 : -1));
         for (byte[] f : this.conditionOnlyCfs) {
             WritableUtils.writeCompressedByteArray(output, f);
         }
-    }
+    
+}
 
     @Override
     public byte[] toByteArray() throws IOException {
@@ -135,26 +145,28 @@ public class ColumnProjectionFilter extends FilterBase implements Writable {
     public void filterRowCells(List<Cell> kvs) throws IOException {
         if (kvs.isEmpty()) return;
         Cell firstKV = kvs.get(0);
-        Iterator<Cell> itr = kvs.iterator();
-        while (itr.hasNext()) {
-            Cell kv = itr.next();
-            ptr.set(kv.getFamilyArray(), kv.getFamilyOffset(), kv.getFamilyLength());
-            if (this.columnsTracker.containsKey(ptr)) {
-                Set<ImmutableBytesPtr> cols = this.columnsTracker.get(ptr);
-                ptr.set(kv.getQualifierArray(), kv.getQualifierOffset(), kv.getQualifierLength());
-                if (cols != null && !(cols.contains(ptr))) {
-                    itr.remove();
+        Iterables.removeIf(kvs, new Predicate<Cell>() {
+            @Override
+            public boolean apply(Cell kv) {
+                ptr.set(kv.getFamilyArray(), kv.getFamilyOffset(), kv.getFamilyLength());
+                if (columnsTracker.containsKey(ptr)) {
+                    Set<ImmutableBytesPtr> cols = columnsTracker.get(ptr);
+                    ptr.set(kv.getQualifierArray(), kv.getQualifierOffset(), kv.getQualifierLength());
+                    if (cols != null && !(cols.contains(ptr))) {
+                        return true;
+                    }
+                } else {
+                    return true;
                 }
-            } else {
-                itr.remove();
+                return false;
             }
-        }
+        });
         // make sure we're not holding to any of the byte[]'s
         ptr.set(HConstants.EMPTY_BYTE_ARRAY);
         if (kvs.isEmpty()) {
-            kvs.add(new KeyValue(firstKV.getRowArray(), firstKV.getRowOffset(),firstKV.getRowLength(), this.emptyCFName,
-                    0, this.emptyCFName.length, QueryConstants.EMPTY_COLUMN_BYTES, 0,
-                    QueryConstants.EMPTY_COLUMN_BYTES.length, HConstants.LATEST_TIMESTAMP, Type.Maximum, null, 0, 0));
+            kvs.add(new KeyValue(firstKV.getRowArray(), firstKV.getRowOffset(), firstKV.getRowLength(),
+                    this.emptyCFName, 0, this.emptyCFName.length, emptyKVQualifier, 0,
+                    emptyKVQualifier.length, HConstants.LATEST_TIMESTAMP, Type.Maximum, null, 0, 0));
         }
     }
 
@@ -175,6 +187,6 @@ public class ColumnProjectionFilter extends FilterBase implements Writable {
     
     @Override
     public ReturnCode filterKeyValue(Cell ignored) throws IOException {
-      return ReturnCode.INCLUDE;
+      return ReturnCode.INCLUDE_AND_NEXT_COL;
     }
 }

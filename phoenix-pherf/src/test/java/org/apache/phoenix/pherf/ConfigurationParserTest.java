@@ -76,6 +76,7 @@ public class ConfigurationParserTest extends ResultBaseTest {
                             && (dataMappingColumns.get(6).getDataValues().size() > 0));
 
             assertDateValue(dataMappingColumns);
+            assertCurrentDateValue(dataMappingColumns);
 
             // Validate column mappings
             for (Column column : dataMappingColumns) {
@@ -161,6 +162,21 @@ public class ConfigurationParserTest extends ResultBaseTest {
         fail("We should have found a Rule value that matched.");
     }
 
+    private void assertCurrentDateValue(List<Column> dataMappingColumns) {
+        for (Column dataMapping : dataMappingColumns) {
+            if ((dataMapping.getType() == DataTypeMapping.DATE) && (dataMapping.getName()
+                    .equals("PRESENT_DATE"))) {
+                //First rule should have use current date value set
+                assertNotNull(dataMapping.getDataValues().get(0).getUseCurrentDate());
+
+                //Second rule should have use current date value set
+                assertNotNull(dataMapping.getDataValues().get(1).getUseCurrentDate());
+                return;
+            }
+        }
+        fail("We should have found a Rule value that matched.");
+    }
+
     /*
         Used for debugging to dump out a simple xml filed based on the bound objects.
      */
@@ -184,6 +200,11 @@ public class ConfigurationParserTest extends ResultBaseTest {
             data.setDataMappingColumns(columnList);
 
             Scenario scenario = new Scenario();
+            scenario.setTenantId("00DXXXXXX");
+        	List<Ddl> preScenarioDdls = new ArrayList<Ddl>();
+        	preScenarioDdls.add(new Ddl("CREATE INDEX IF NOT EXISTS ? ON FHA (NEWVAL_NUMBER) ASYNC", "FHAIDX_NEWVAL_NUMBER"));
+        	preScenarioDdls.add(new Ddl("CREATE LOCAL INDEX IF NOT EXISTS ? ON FHA (NEWVAL_NUMBER)", "FHAIDX_NEWVAL_NUMBER"));
+			scenario.setPreScenarioDdls(preScenarioDdls);
             scenario.setPhoenixProperties(new HashMap<String, String>());
             scenario.getPhoenixProperties().put("phoenix.query.threadPoolSize", "200");
             scenario.setDataOverride(new DataOverride());

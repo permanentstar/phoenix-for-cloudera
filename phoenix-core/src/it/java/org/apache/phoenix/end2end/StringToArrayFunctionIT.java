@@ -21,37 +21,51 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-import java.sql.*;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 
 import org.apache.phoenix.schema.types.PVarchar;
 import org.apache.phoenix.schema.types.PhoenixArray;
+import org.junit.Before;
 import org.junit.Test;
 
-public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
+public class StringToArrayFunctionIT extends ParallelStatsDisabledIT {
 
-    private void initTables(Connection conn) throws Exception {
-        String ddl = "CREATE TABLE regions (region_name VARCHAR PRIMARY KEY, string1 VARCHAR, string2 CHAR(50), delimiter1 VARCHAR, delimiter2 CHAR(20), nullstring1 VARCHAR, nullstring2 CHAR(20))";
-        conn.createStatement().execute(ddl);
-        String dml = "UPSERT INTO regions(region_name, string1, string2, delimiter1, delimiter2, nullstring1, nullstring2) VALUES('SF Bay Area'," +
-                "'a,b,c,d'," +
-                "'1.2.3.4'," +
-                "','," +
-                "'.'," +
-                "'c'," +
-                "'3'" +
-                ")";
-        PreparedStatement stmt = conn.prepareStatement(dml);
-        stmt.execute();
-        conn.commit();
+    private String tableName;
+
+    @Before
+    public void initTables() throws Exception {
+        tableName = generateUniqueName();
+        try (Connection conn = DriverManager.getConnection(getUrl())) {
+            String ddl = "CREATE TABLE " + tableName
+                + " (region_name VARCHAR PRIMARY KEY, string1 VARCHAR, string2 CHAR(50), delimiter1 VARCHAR, delimiter2 CHAR(20), nullstring1 VARCHAR, nullstring2 CHAR(20))";
+            conn.createStatement().execute(ddl);
+            String dml = "UPSERT INTO " + tableName
+                + "(region_name, string1, string2, delimiter1, delimiter2, nullstring1, nullstring2) VALUES('SF Bay Area',"
+                +
+                    "'a,b,c,d'," +
+                    "'1.2.3.4'," +
+                    "','," +
+                    "'.'," +
+                    "'c'," +
+                    "'3'" +
+                    ")";
+            PreparedStatement stmt = conn.prepareStatement(dml);
+            stmt.execute();
+            conn.commit();
+        }
     }
 
     @Test
     public void testStringToArrayFunction1() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY(string1, delimiter1) FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY(string1, delimiter1) FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"a", "b", "c", "d"});
@@ -63,10 +77,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunction2() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY(string1, delimiter1, nullstring1) FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY(string1, delimiter1, nullstring1) FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"a", "b", null, "d"});
@@ -78,10 +93,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunction3() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY(string1, delimiter1, 'a') FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY(string1, delimiter1, 'a') FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{null, "b", "c", "d"});
@@ -93,10 +109,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunction4() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY(string1, delimiter1, 'd') FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY(string1, delimiter1, 'd') FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"a", "b", "c", null});
@@ -108,10 +125,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunction5() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY(string2, delimiter2) FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY(string2, delimiter2) FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"1", "2", "3", "4"});
@@ -123,10 +141,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunction6() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY(string2, delimiter2, nullstring2) FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY(string2, delimiter2, nullstring2) FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"1", "2", null, "4"});
@@ -138,10 +157,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunction7() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY(string2, delimiter2, '1') FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY(string2, delimiter2, '1') FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{null, "2", "3", "4"});
@@ -153,10 +173,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunction8() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY(string2, delimiter2, '4') FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY(string2, delimiter2, '4') FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"1", "2", "3", null});
@@ -168,10 +189,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunction9() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY(region_name, ' ', '4') FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY(region_name, ' ', '4') FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"SF", "Bay", "Area"});
@@ -183,10 +205,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunction10() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY('hello,hello,hello', delimiter1) FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY('hello,hello,hello', delimiter1) FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"hello", "hello", "hello"});
@@ -198,10 +221,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunction11() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY('a,hello,hello,hello,b', ',', 'hello') FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY('a,hello,hello,hello,b', ',', 'hello') FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"a", null, null, null, "b"});
@@ -213,10 +237,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunction12() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY('b.a.b', delimiter2, 'b') FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY('b.a.b', delimiter2, 'b') FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{null, "a", null});
@@ -228,10 +253,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunctionWithNestedFunctions1() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT ARRAY_LENGTH(STRING_TO_ARRAY('a, b, c', ', ')) FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT ARRAY_LENGTH(STRING_TO_ARRAY('a, b, c', ', ')) FROM " + tableName
+                + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         assertEquals(3, rs.getInt(1));
@@ -241,10 +267,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunctionWithNestedFunctions2() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY(ARRAY_TO_STRING(ARRAY['a', 'b', 'c'], delimiter2), delimiter2, 'b') FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY(ARRAY_TO_STRING(ARRAY['a', 'b', 'c'], delimiter2), delimiter2, 'b') FROM "
+                + tableName + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"a", null, "c"});
@@ -256,10 +283,11 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunctionWithNestedFunctions3() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT STRING_TO_ARRAY(ARRAY_TO_STRING(ARRAY['a', 'b', 'c'], delimiter2), ARRAY_ELEM(ARRAY[',', '.'], 2), 'b') FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT STRING_TO_ARRAY(ARRAY_TO_STRING(ARRAY['a', 'b', 'c'], delimiter2), ARRAY_ELEM(ARRAY[',', '.'], 2), 'b') FROM "
+                + tableName + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"a", null, "c"});
@@ -272,15 +300,19 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     public void testStringToArrayFunctionWithUpsert1() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
 
-        String ddl = "CREATE TABLE regions (region_name VARCHAR PRIMARY KEY,varchars VARCHAR[])";
+        String tableName = generateUniqueName();
+        String ddl =
+            "CREATE TABLE " + tableName + " (region_name VARCHAR PRIMARY KEY,varchars VARCHAR[])";
         conn.createStatement().execute(ddl);
 
-        String dml = "UPSERT INTO regions(region_name,varchars) VALUES('SF Bay Area', STRING_TO_ARRAY('hello, world, :-)', ', '))";
+        String dml = "UPSERT INTO " + tableName
+            + "(region_name,varchars) VALUES('SF Bay Area', STRING_TO_ARRAY('hello, world, :-)', ', '))";
         conn.createStatement().execute(dml);
         conn.commit();
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT varchars FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT varchars FROM " + tableName + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"hello", "world", ":-)"});
@@ -293,15 +325,19 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     public void testStringToArrayFunctionWithUpsert2() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
 
-        String ddl = "CREATE TABLE regions (region_name VARCHAR PRIMARY KEY,varchars VARCHAR[])";
+        String tableName = generateUniqueName();
+        String ddl =
+            "CREATE TABLE " + tableName + " (region_name VARCHAR PRIMARY KEY,varchars VARCHAR[])";
         conn.createStatement().execute(ddl);
 
-        String dml = "UPSERT INTO regions(region_name,varchars) VALUES('SF Bay Area', STRING_TO_ARRAY('a, b, -, c', ', ', '-'))";
+        String dml = "UPSERT INTO " + tableName
+            + "(region_name,varchars) VALUES('SF Bay Area', STRING_TO_ARRAY('a, b, -, c', ', ', '-'))";
         conn.createStatement().execute(dml);
         conn.commit();
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT varchars FROM regions WHERE region_name = 'SF Bay Area'");
+        rs = conn.createStatement().executeQuery(
+            "SELECT varchars FROM " + tableName + " WHERE region_name = 'SF Bay Area'");
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"a", "b", null, "c"});
@@ -314,25 +350,32 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     public void testStringToArrayFunctionWithUpsertSelect1() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
 
-        String ddl = "CREATE TABLE source (region_name VARCHAR PRIMARY KEY, varchar VARCHAR)";
+        String table1 = generateUniqueName();
+        String ddl =
+            "CREATE TABLE " + table1 + " (region_name VARCHAR PRIMARY KEY, varchar VARCHAR)";
         conn.createStatement().execute(ddl);
 
-        ddl = "CREATE TABLE target (region_name VARCHAR PRIMARY KEY, varchars VARCHAR[])";
+        String table2 = generateUniqueName();
+        ddl = "CREATE TABLE " + table2 + " (region_name VARCHAR PRIMARY KEY, varchars VARCHAR[])";
         conn.createStatement().execute(ddl);
 
-        String dml = "UPSERT INTO source(region_name, varchar) VALUES('SF Bay Area', 'a,b,c,d')";
+        String dml =
+            "UPSERT INTO " + table1 + "(region_name, varchar) VALUES('SF Bay Area', 'a,b,c,d')";
         conn.createStatement().execute(dml);
 
-        dml = "UPSERT INTO source(region_name, varchar) VALUES('SF Bay Area2', '1,2,3,4')";
+        dml = "UPSERT INTO " + table1 + "(region_name, varchar) VALUES('SF Bay Area2', '1,2,3,4')";
         conn.createStatement().execute(dml);
         conn.commit();
 
-        dml = "UPSERT INTO target(region_name, varchars) SELECT region_name, STRING_TO_ARRAY(varchar, ',') FROM source";
+        dml =
+            "UPSERT INTO " + table2
+                + "(region_name, varchars) SELECT region_name, STRING_TO_ARRAY(varchar, ',') FROM "
+                + table1;
         conn.createStatement().execute(dml);
         conn.commit();
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT varchars FROM target");
+        rs = conn.createStatement().executeQuery("SELECT varchars FROM " + table2);
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"a", "b", "c", "d"});
@@ -350,25 +393,35 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     public void testStringToArrayFunctionWithUpsertSelect2() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
 
-        String ddl = "CREATE TABLE source (region_name VARCHAR PRIMARY KEY, varchar VARCHAR)";
+        String sourceTable = generateUniqueName();
+
+        String ddl =
+            "CREATE TABLE " + sourceTable + " (region_name VARCHAR PRIMARY KEY, varchar VARCHAR)";
         conn.createStatement().execute(ddl);
 
-        ddl = "CREATE TABLE target (region_name VARCHAR PRIMARY KEY, varchars VARCHAR[])";
+        String targetTable = generateUniqueName();
+        ddl = "CREATE TABLE " + targetTable
+            + " (region_name VARCHAR PRIMARY KEY, varchars VARCHAR[])";
         conn.createStatement().execute(ddl);
 
-        String dml = "UPSERT INTO source(region_name, varchar) VALUES('SF Bay Area', 'a,b,-,c,d')";
+        String dml = "UPSERT INTO " + sourceTable
+            + "(region_name, varchar) VALUES('SF Bay Area', 'a,b,-,c,d')";
         conn.createStatement().execute(dml);
 
-        dml = "UPSERT INTO source(region_name, varchar) VALUES('SF Bay Area2', '1,2,-,3,4')";
+        dml = "UPSERT INTO " + sourceTable
+            + "(region_name, varchar) VALUES('SF Bay Area2', '1,2,-,3,4')";
         conn.createStatement().execute(dml);
         conn.commit();
 
-        dml = "UPSERT INTO target(region_name, varchars) SELECT region_name, STRING_TO_ARRAY(varchar, ',', '-') FROM source";
+        dml =
+            "UPSERT INTO " + targetTable
+                + "(region_name, varchars) SELECT region_name, STRING_TO_ARRAY(varchar, ',', '-') FROM "
+                + sourceTable;
         conn.createStatement().execute(dml);
         conn.commit();
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT varchars FROM target");
+        rs = conn.createStatement().executeQuery("SELECT varchars FROM " + targetTable);
         assertTrue(rs.next());
 
         PhoenixArray expected = new PhoenixArray(PVarchar.INSTANCE, new Object[]{"a", "b", null, "c", "d"});
@@ -385,10 +438,10 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunctionInWhere1() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT region_name FROM regions WHERE ARRAY['a', 'b', 'c', 'd']=STRING_TO_ARRAY(string1, delimiter1)");
+        rs = conn.createStatement().executeQuery("SELECT region_name FROM " + tableName
+            + " WHERE ARRAY['a', 'b', 'c', 'd']=STRING_TO_ARRAY(string1, delimiter1)");
         assertTrue(rs.next());
 
         assertEquals("SF Bay Area", rs.getString(1));
@@ -398,10 +451,10 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunctionInWhere2() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT region_name FROM regions WHERE 'a'=ANY(STRING_TO_ARRAY(string1, delimiter1))");
+        rs = conn.createStatement().executeQuery("SELECT region_name FROM " + tableName
+            + " WHERE 'a'=ANY(STRING_TO_ARRAY(string1, delimiter1))");
         assertTrue(rs.next());
 
         assertEquals("SF Bay Area", rs.getString(1));
@@ -411,10 +464,10 @@ public class StringToArrayFunctionIT extends BaseHBaseManagedTimeIT {
     @Test
     public void testStringToArrayFunctionInWhere3() throws Exception {
         Connection conn = DriverManager.getConnection(getUrl());
-        initTables(conn);
 
         ResultSet rs;
-        rs = conn.createStatement().executeQuery("SELECT region_name FROM regions WHERE 'a'=ALL(STRING_TO_ARRAY('a,a,a,', delimiter1))");
+        rs = conn.createStatement().executeQuery("SELECT region_name FROM " + tableName
+            + " WHERE 'a'=ALL(STRING_TO_ARRAY('a,a,a,', delimiter1))");
         assertTrue(rs.next());
 
         assertEquals("SF Bay Area", rs.getString(1));

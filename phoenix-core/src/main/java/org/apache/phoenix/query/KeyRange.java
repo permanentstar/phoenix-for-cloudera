@@ -24,6 +24,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
@@ -35,7 +37,6 @@ import org.apache.phoenix.util.ByteUtil;
 import org.apache.phoenix.util.ScanUtil.BytesComparator;
 
 import com.google.common.base.Function;
-import com.google.common.collect.ComparisonChain;
 import com.google.common.collect.Lists;
 
 import edu.umd.cs.findbugs.annotations.NonNull;
@@ -82,18 +83,27 @@ public class KeyRange implements Writable {
     };
     public static final Comparator<KeyRange> COMPARATOR = new Comparator<KeyRange>() {
         @Override public int compare(KeyRange o1, KeyRange o2) {
-            return ComparisonChain.start()
-                     .compareFalseFirst(o2.lowerUnbound(), o1.lowerUnbound())
-                    .compare(o1.getLowerRange(), o2.getLowerRange(), Bytes.BYTES_COMPARATOR)
-                    // we want o1 lower inclusive to come before o2 lower inclusive, but
-                    // false comes before true, so we have to negate
-                    .compareFalseFirst(o2.isLowerInclusive(), o1.isLowerInclusive())
-                    // for the same lower bounding, we want a finite upper bound to
-                    // be ordered before an infinite upper bound
-                    .compareFalseFirst(o1.upperUnbound(), o2.upperUnbound())
-                    .compare(o1.getUpperRange(), o2.getUpperRange(), Bytes.BYTES_COMPARATOR)
-                    .compareFalseFirst(o2.isUpperInclusive(), o1.isUpperInclusive())
-                    .result();
+            int result = Boolean.compare(o2.lowerUnbound(), o1.lowerUnbound());
+            if (result != 0) {
+                return result;
+            }
+            result = Bytes.BYTES_COMPARATOR.compare(o1.getLowerRange(), o2.getLowerRange());
+            if (result != 0) {
+                return result;
+            }
+            result = Boolean.compare(o2.isLowerInclusive(), o1.isLowerInclusive());
+            if (result != 0) {
+                return result;
+            }
+            result = Boolean.compare(o1.upperUnbound(), o2.upperUnbound());
+            if (result != 0) {
+                return result;
+            }
+            result = Bytes.BYTES_COMPARATOR.compare(o1.getUpperRange(), o2.getUpperRange());
+            if (result != 0) {
+                return result;
+            }
+            return Boolean.compare(o2.isUpperInclusive(), o1.isUpperInclusive());
         }
     };
 
@@ -111,15 +121,30 @@ public class KeyRange implements Writable {
         return getKeyRange(lowerRange, true, upperRange, false);
     }
 
-    // TODO: make non public and move to org.apache.phoenix.type soon
-    public static KeyRange getKeyRange(byte[] lowerRange, boolean lowerInclusive,
+    private static KeyRange getSingleton(byte[] lowerRange, boolean lowerInclusive,
             byte[] upperRange, boolean upperInclusive) {
         if (lowerRange == null || upperRange == null) {
             return EMPTY_RANGE;
         }
-        // Need to treat null differently for a point range
-        if (lowerRange.length == 0 && upperRange.length == 0 && lowerInclusive && upperInclusive) {
-            return IS_NULL_RANGE;
+        if (lowerRange.length == 0 && upperRange.length == 0) {
+            // Need singleton to represent NULL range so it gets treated differently
+            // than an unbound RANGE.
+            return lowerInclusive && upperInclusive ? IS_NULL_RANGE : EVERYTHING_RANGE;
+        }
+        if (lowerRange.length != 0 && upperRange.length != 0) {
+            int cmp = Bytes.compareTo(lowerRange, upperRange);
+            if (cmp > 0 || (cmp == 0 && !(lowerInclusive && upperInclusive))) {
+                return EMPTY_RANGE;
+            }
+        }
+        return null;
+    }
+    
+    public static KeyRange getKeyRange(byte[] lowerRange, boolean lowerInclusive,
+            byte[] upperRange, boolean upperInclusive) {
+        KeyRange range = getSingleton(lowerRange, lowerInclusive, upperRange, upperInclusive);
+        if (range != null) {
+            return range;
         }
         boolean unboundLower = false;
         boolean unboundUpper = false;
@@ -134,20 +159,23 @@ public class KeyRange implements Writable {
             unboundUpper = true;
         }
 
-        if (unboundLower && unboundUpper) {
-            return EVERYTHING_RANGE;
-        }
-        if (!unboundLower && !unboundUpper) {
-            int cmp = Bytes.compareTo(lowerRange, upperRange);
-            if (cmp > 0 || (cmp == 0 && !(lowerInclusive && upperInclusive))) {
-                return EMPTY_RANGE;
-            }
-        }
         return new KeyRange(lowerRange, unboundLower ? false : lowerInclusive,
                 upperRange, unboundUpper ? false : upperInclusive);
     }
 
-    public KeyRange() {
+    public static KeyRange read(DataInput input) throws IOException {
+        KeyRange range = new KeyRange();
+        range.readFields(input);
+        // Translate to singleton after reading
+        KeyRange singletonRange = getSingleton(range.lowerRange, range.lowerInclusive, range.upperRange, range.upperInclusive);
+        if (singletonRange != null) {
+            return singletonRange;
+        }
+        // Otherwise, just keep the range we read
+        return range;
+    }
+    
+    private KeyRange() {
         this.lowerRange = DEGENERATE_KEY;
         this.lowerInclusive = false;
         this.upperRange = DEGENERATE_KEY;
@@ -330,10 +358,9 @@ public class KeyRange implements Writable {
         boolean newUpperInclusive;
         // Special case for null, is it is never included another range
         // except for null itself.
-        if (this == IS_NULL_RANGE) {
-            if (range == IS_NULL_RANGE) {
+        if (this == IS_NULL_RANGE && range == IS_NULL_RANGE) {
                 return IS_NULL_RANGE;
-            }
+        } else if(this == IS_NULL_RANGE || range == IS_NULL_RANGE) {
             return EMPTY_RANGE;
         }
         if (lowerUnbound()) {
@@ -491,32 +518,60 @@ public class KeyRange implements Writable {
         return Lists.transform(keys, POINT);
     }
 
-    public static List<KeyRange> intersect(List<KeyRange> keyRanges, List<KeyRange> keyRanges2) {
-        List<KeyRange> tmp = new ArrayList<KeyRange>();
-        for (KeyRange r1 : keyRanges) {
-            for (KeyRange r2 : keyRanges2) {
-                KeyRange r = r1.intersect(r2);
-                if (EMPTY_RANGE != r) {
-                    tmp.add(r);
+    private static int compareUpperRange(KeyRange rowKeyRange1,KeyRange rowKeyRange2) {
+        int result = Boolean.compare(rowKeyRange1.upperUnbound(), rowKeyRange2.upperUnbound());
+        if (result != 0) {
+            return result;
+        }
+        result = Bytes.BYTES_COMPARATOR.compare(rowKeyRange1.getUpperRange(), rowKeyRange2.getUpperRange());
+        if (result != 0) {
+            return result;
+        }
+        return Boolean.compare(rowKeyRange2.isUpperInclusive(), rowKeyRange1.isUpperInclusive());
+    }
+
+    public static List<KeyRange> intersect(List<KeyRange> rowKeyRanges1, List<KeyRange> rowKeyRanges2) {
+        List<KeyRange> newRowKeyRanges1=coalesce(rowKeyRanges1);
+        List<KeyRange> newRowKeyRanges2=coalesce(rowKeyRanges2);
+        Iterator<KeyRange> iter1=newRowKeyRanges1.iterator();
+        Iterator<KeyRange> iter2=newRowKeyRanges2.iterator();
+
+        List<KeyRange> result = new LinkedList<KeyRange>();
+        KeyRange rowKeyRange1=null;
+        KeyRange rowKeyRange2=null;
+        while(true) {
+            if(rowKeyRange1==null) {
+                if(!iter1.hasNext()) {
+                    break;
                 }
+                rowKeyRange1=iter1.next();
+            }
+            if(rowKeyRange2==null) {
+                if(!iter2.hasNext()) {
+                    break;
+                }
+                rowKeyRange2=iter2.next();
+            }
+            KeyRange intersectedRowKeyRange=rowKeyRange1.intersect(rowKeyRange2);
+            if(intersectedRowKeyRange!=EMPTY_RANGE) {
+                result.add(intersectedRowKeyRange);
+            }
+            int cmp=compareUpperRange(rowKeyRange1, rowKeyRange2);
+            if(cmp < 0) {
+                //move iter1
+                rowKeyRange1=null;
+            } else if(cmp > 0) {
+                //move iter2
+                rowKeyRange2=null;
+            } else {
+                //move iter1 and iter2
+                rowKeyRange1=rowKeyRange2=null;
             }
         }
-        if (tmp.size() == 0) {
+        if (result.size() == 0) {
             return Collections.singletonList(KeyRange.EMPTY_RANGE);
         }
-        Collections.sort(tmp, KeyRange.COMPARATOR);
-        List<KeyRange> tmp2 = new ArrayList<KeyRange>();
-        KeyRange r = tmp.get(0);
-        for (int i=1; i<tmp.size(); i++) {
-            if (EMPTY_RANGE == r.intersect(tmp.get(i))) {
-                tmp2.add(r);
-                r = tmp.get(i);
-            } else {
-                r = r.intersect(tmp.get(i));
-            }
-        }
-        tmp2.add(r);
-        return tmp2;
+        return result;
     }
     
     public KeyRange invert() {

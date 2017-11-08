@@ -22,6 +22,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
@@ -42,8 +43,8 @@ import org.apache.phoenix.iterate.DefaultParallelScanGrouper;
 import org.apache.phoenix.iterate.ParallelScanGrouper;
 import org.apache.phoenix.iterate.ResultIterator;
 import org.apache.phoenix.jdbc.PhoenixConnection;
-import org.apache.phoenix.jdbc.PhoenixParameterMetaData;
 import org.apache.phoenix.jdbc.PhoenixStatement;
+import org.apache.phoenix.jdbc.PhoenixStatement.Operation;
 import org.apache.phoenix.metrics.MetricInfo;
 import org.apache.phoenix.parse.FilterableStatement;
 import org.apache.phoenix.parse.LiteralParseNode;
@@ -52,6 +53,7 @@ import org.apache.phoenix.parse.TraceStatement;
 import org.apache.phoenix.query.KeyRange;
 import org.apache.phoenix.schema.PColumn;
 import org.apache.phoenix.schema.PColumnImpl;
+import org.apache.phoenix.schema.PName;
 import org.apache.phoenix.schema.PNameFactory;
 import org.apache.phoenix.schema.RowKeyValueAccessor;
 import org.apache.phoenix.schema.SortOrder;
@@ -73,10 +75,11 @@ public class TraceQueryPlan implements QueryPlan {
     private static final RowProjector TRACE_PROJECTOR;
     static {
         List<ExpressionProjector> projectedColumns = new ArrayList<ExpressionProjector>();
+        PName colName = PNameFactory.newName(MetricInfo.TRACE.columnName);
         PColumn column =
                 new PColumnImpl(PNameFactory.newName(MetricInfo.TRACE.columnName), null,
                         PLong.INSTANCE, null, null, false, 0, SortOrder.getDefault(), 0, null,
-                        false, null, false);
+                        false, null, false, false, colName.getBytes());
         List<PColumn> columns = new ArrayList<PColumn>();
         columns.add(column);
         Expression expression =
@@ -87,12 +90,17 @@ public class TraceQueryPlan implements QueryPlan {
         TRACE_PROJECTOR = new RowProjector(projectedColumns, estimatedByteSize, false);
     }
 
-    public TraceQueryPlan(TraceStatement traceStatement, PhoenixStatement stmt) {
+    public TraceQueryPlan(TraceStatement traceStatement, PhoenixStatement stmt ) {
         this.traceStatement = traceStatement;
         this.stmt = stmt;
         this.context = new StatementContext(stmt);
     }
 
+	@Override
+	public Operation getOperation() {
+		return traceStatement.getOperation();
+	}
+	
     @Override
     public StatementContext getContext() {
         return this.context;
@@ -100,12 +108,7 @@ public class TraceQueryPlan implements QueryPlan {
 
     @Override
     public ParameterMetaData getParameterMetaData() {
-        return PhoenixParameterMetaData.EMPTY_PARAMETER_META_DATA;
-    }
-
-    @Override
-    public ExplainPlan getExplainPlan() throws SQLException {
-        return ExplainPlan.EMPTY_PLAN;
+        return context.getBindManager().getParameterMetaData();
     }
     
     @Override
@@ -113,6 +116,11 @@ public class TraceQueryPlan implements QueryPlan {
     	return iterator(DefaultParallelScanGrouper.getInstance());
     }
 
+    @Override
+    public ResultIterator iterator(ParallelScanGrouper scanGrouper, Scan scan) throws SQLException {
+        return iterator(scanGrouper);
+    }
+        
     @Override
     public ResultIterator iterator(ParallelScanGrouper scanGrouper) throws SQLException {
         final PhoenixConnection conn = stmt.getConnection();
@@ -185,6 +193,11 @@ public class TraceQueryPlan implements QueryPlan {
     }
 
     @Override
+    public Set<TableRef> getSourceRefs() {
+        return Collections.emptySet();
+    }
+
+    @Override
     public TableRef getTableRef() {
         return null;
     }
@@ -196,6 +209,11 @@ public class TraceQueryPlan implements QueryPlan {
 
     @Override
     public Integer getLimit() {
+        return null;
+    }
+
+    @Override
+    public Integer getOffset() {
         return null;
     }
 
@@ -233,9 +251,24 @@ public class TraceQueryPlan implements QueryPlan {
     public boolean isRowKeyOrdered() {
         return false;
     }
+
+    @Override
+    public ExplainPlan getExplainPlan() throws SQLException {
+        return ExplainPlan.EMPTY_PLAN;
+    }
     
     @Override
     public boolean useRoundRobinIterator() {
         return false;
+    }
+
+    @Override
+    public Long getEstimatedRowsToScan() {
+        return 0l;
+    }
+
+    @Override
+    public Long getEstimatedBytesToScan() {
+        return 0l;
     }
 }

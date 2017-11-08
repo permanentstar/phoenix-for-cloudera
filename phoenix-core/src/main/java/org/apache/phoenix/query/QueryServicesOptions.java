@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,24 +17,34 @@
  */
 package org.apache.phoenix.query;
 
+import static org.apache.hadoop.hbase.HConstants.DEFAULT_HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD;
 import static org.apache.phoenix.query.QueryServices.ALLOW_ONLINE_TABLE_SCHEMA_UPDATE;
 import static org.apache.phoenix.query.QueryServices.ALLOW_VIEWS_ADD_NEW_CF_BASE_TABLE;
+import static org.apache.phoenix.query.QueryServices.AUTO_UPGRADE_ENABLED;
 import static org.apache.phoenix.query.QueryServices.CALL_QUEUE_PRODUCER_ATTRIB_NAME;
 import static org.apache.phoenix.query.QueryServices.CALL_QUEUE_ROUND_ROBIN_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.COLLECT_REQUEST_LEVEL_METRICS;
+import static org.apache.phoenix.query.QueryServices.COMMIT_STATS_ASYNC;
 import static org.apache.phoenix.query.QueryServices.DATE_FORMAT_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.DATE_FORMAT_TIMEZONE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.DELAY_FOR_SCHEMA_UPDATE_CHECK;
 import static org.apache.phoenix.query.QueryServices.DROP_METADATA_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.EXPLAIN_CHUNK_COUNT_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.EXPLAIN_ROW_COUNT_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.EXTRA_JDBC_ARGUMENTS_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.FORCE_ROW_KEY_ORDER_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.GLOBAL_METRICS_ENABLED;
 import static org.apache.phoenix.query.QueryServices.GROUPBY_MAX_CACHE_SIZE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.GROUPBY_SPILLABLE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.GROUPBY_SPILL_FILES_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.HBASE_CLIENT_SCANNER_TIMEOUT_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.IMMUTABLE_ROWS_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.INDEX_MUTATE_BATCH_SIZE_THRESHOLD_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.INDEX_POPULATION_SLEEP_TIME;
+import static org.apache.phoenix.query.QueryServices.IS_NAMESPACE_MAPPING_ENABLED;
+import static org.apache.phoenix.query.QueryServices.IS_SYSTEM_TABLE_MAPPED_TO_NAMESPACE;
 import static org.apache.phoenix.query.QueryServices.KEEP_ALIVE_MS_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.LOCAL_INDEX_CLIENT_UPGRADE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.MASTER_INFO_PORT_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.MAX_CLIENT_METADATA_CACHE_SIZE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.MAX_MEMORY_PERC_ATTRIB;
@@ -50,24 +60,39 @@ import static org.apache.phoenix.query.QueryServices.MUTATE_BATCH_SIZE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.NUM_RETRIES_FOR_SCHEMA_UPDATE_CHECK;
 import static org.apache.phoenix.query.QueryServices.QUEUE_SIZE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.REGIONSERVER_INFO_PORT_ATTRIB;
-import static org.apache.phoenix.query.QueryServices.REGIONSERVER_LEASE_PERIOD_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.RENEW_LEASE_ENABLED;
+import static org.apache.phoenix.query.QueryServices.RENEW_LEASE_THREAD_POOL_SIZE;
+import static org.apache.phoenix.query.QueryServices.RENEW_LEASE_THRESHOLD_MILLISECONDS;
 import static org.apache.phoenix.query.QueryServices.ROW_KEY_ORDER_SALTED_TABLE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.RPC_TIMEOUT_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.RUN_RENEW_LEASE_FREQUENCY_INTERVAL_MILLISECONDS;
+import static org.apache.phoenix.query.QueryServices.RUN_UPDATE_STATS_ASYNC;
 import static org.apache.phoenix.query.QueryServices.SCAN_CACHE_SIZE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.SCAN_RESULT_CHUNK_SIZE;
 import static org.apache.phoenix.query.QueryServices.SEQUENCE_CACHE_SIZE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.SEQUENCE_SALT_BUCKETS_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.SPOOL_DIRECTORY;
 import static org.apache.phoenix.query.QueryServices.SPOOL_THRESHOLD_BYTES_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.STATS_COLLECTION_ENABLED;
 import static org.apache.phoenix.query.QueryServices.STATS_GUIDEPOST_WIDTH_BYTES_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.STATS_UPDATE_FREQ_MS_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.STATS_USE_CURRENT_TIME_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.THREAD_POOL_SIZE_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.THREAD_TIMEOUT_MS_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.TRANSACTIONS_ENABLED;
+import static org.apache.phoenix.query.QueryServices.UPLOAD_BINARY_DATA_TYPE_ENCODING;
 import static org.apache.phoenix.query.QueryServices.USE_BYTE_BASED_REGEX_ATTRIB;
 import static org.apache.phoenix.query.QueryServices.USE_INDEXES_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.TRACING_ENABLED;
+import static org.apache.phoenix.query.QueryServices.TRACING_STATS_TABLE_NAME_ATTRIB;
+import static org.apache.phoenix.query.QueryServices.TRACING_BATCH_SIZE;
+import static org.apache.phoenix.query.QueryServices.TRACING_THREAD_POOL_SIZE;
+import static org.apache.phoenix.query.QueryServices.TRACING_TRACE_BUFFER_SIZE;
+import static org.apache.phoenix.query.QueryServices.USE_STATS_FOR_PARALLELIZATION;
 
+import java.util.HashSet;
 import java.util.Map.Entry;
+import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Coprocessor;
@@ -75,9 +100,13 @@ import org.apache.hadoop.hbase.client.Consistency;
 import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
 import org.apache.hadoop.hbase.ipc.controller.ClientRpcControllerFactory;
 import org.apache.hadoop.hbase.regionserver.wal.WALCellCodec;
+import org.apache.phoenix.schema.PTable.ImmutableStorageScheme;
+import org.apache.phoenix.schema.PTable.QualifierEncodingScheme;
+import org.apache.phoenix.schema.PTableRefFactory;
 import org.apache.phoenix.trace.util.Tracing;
 import org.apache.phoenix.util.DateUtil;
 import org.apache.phoenix.util.ReadOnlyProps;
+
 
 
 /**
@@ -92,7 +121,7 @@ public class QueryServicesOptions {
 	public static final int DEFAULT_QUEUE_SIZE = 5000;
 	public static final int DEFAULT_THREAD_TIMEOUT_MS = 600000; // 10min
 	public static final int DEFAULT_SPOOL_THRESHOLD_BYTES = 1024 * 1024 * 20; // 20m
-    public static final String DEFAULT_SPOOL_DIRECTORY = "/tmp";
+    public static final String DEFAULT_SPOOL_DIRECTORY = System.getProperty("java.io.tmpdir");
 	public static final int DEFAULT_MAX_MEMORY_PERC = 15; // 15% of heap
 	public static final int DEFAULT_MAX_MEMORY_WAIT_MS = 10000;
 	public static final int DEFAULT_MAX_TENANT_MEMORY_PERC = 100;
@@ -103,23 +132,33 @@ public class QueryServicesOptions {
     public static final String DEFAULT_DATE_FORMAT_TIMEZONE = DateUtil.DEFAULT_TIME_ZONE_ID;
     public static final boolean DEFAULT_CALL_QUEUE_ROUND_ROBIN = true;
     public static final int DEFAULT_MAX_MUTATION_SIZE = 500000;
+    public static final int DEFAULT_MAX_MUTATION_SIZE_BYTES =  104857600; // 100 Mb
     public static final boolean DEFAULT_USE_INDEXES = true; // Use indexes
     public static final boolean DEFAULT_IMMUTABLE_ROWS = false; // Tables rows may be updated
     public static final boolean DEFAULT_DROP_METADATA = true; // Drop meta data also.
+    public static final long DEFAULT_DRIVER_SHUTDOWN_TIMEOUT_MS = 5  * 1000; // Time to wait in ShutdownHook to exit gracefully.
+    public static final boolean DEFAULT_TRACING_ENABLED = false;
+    public static final int DEFAULT_TRACING_THREAD_POOL_SIZE = 5;
+    public static final int DEFAULT_TRACING_BATCH_SIZE = 100;
+    public static final int DEFAULT_TRACING_TRACE_BUFFER_SIZE = 1000;
 
-    public final static int DEFAULT_MUTATE_BATCH_SIZE = 1000; // Batch size for UPSERT SELECT and DELETE
+    public final static int DEFAULT_MUTATE_BATCH_SIZE = 100; // Batch size for UPSERT SELECT and DELETE
+    //Batch size in bytes for UPSERT, SELECT and DELETE. By default, 2MB
+    public final static long DEFAULT_MUTATE_BATCH_SIZE_BYTES = 2097152;
 	// The only downside of it being out-of-sync is that the parallelization of the scan won't be as balanced as it could be.
     public static final int DEFAULT_MAX_SERVER_CACHE_TIME_TO_LIVE_MS = 30000; // 30 sec (with no activity)
     public static final int DEFAULT_SCAN_CACHE_SIZE = 1000;
     public static final int DEFAULT_MAX_INTRA_REGION_PARALLELIZATION = DEFAULT_MAX_QUERY_CONCURRENCY;
     public static final int DEFAULT_DISTINCT_VALUE_COMPRESS_THRESHOLD = 1024 * 1024 * 1; // 1 Mb
-    public static final int DEFAULT_INDEX_MUTATE_BATCH_SIZE_THRESHOLD = 5;
+    public static final int DEFAULT_INDEX_MUTATE_BATCH_SIZE_THRESHOLD = 3;
     public static final long DEFAULT_MAX_SPOOL_TO_DISK_BYTES = 1024000000;
     // Only the first chunked batches are fetched in parallel, so this default
     // should be on the relatively bigger side of things. Bigger means more
     // latency and client-side spooling/buffering. Smaller means less initial
     // latency and less parallelization.
     public static final long DEFAULT_SCAN_RESULT_CHUNK_SIZE = 2999;
+    public static final boolean DEFAULT_IS_NAMESPACE_MAPPING_ENABLED = false;
+    public static final boolean DEFAULT_IS_SYSTEM_TABLE_MAPPED_TO_NAMESPACE = true;
 
     //
     // Spillable GroupBy - SPGBY prefix
@@ -133,15 +172,21 @@ public class QueryServicesOptions {
     public static final long DEFAULT_GROUPBY_MAX_CACHE_MAX = 1024L*1024L*100L;  // 100 Mb
 
     public static final long DEFAULT_SEQUENCE_CACHE_SIZE = 100;  // reserve 100 sequences at a time
-    public static final int DEFAULT_INDEX_MAX_FILESIZE_PERC = 50; // % of data table max file size for index table
     public static final long DEFAULT_MAX_SERVER_METADATA_CACHE_TIME_TO_LIVE_MS =  60000 * 30; // 30 mins
     public static final long DEFAULT_MAX_SERVER_METADATA_CACHE_SIZE =  1024L*1024L*20L; // 20 Mb
     public static final long DEFAULT_MAX_CLIENT_METADATA_CACHE_SIZE =  1024L*1024L*10L; // 10 Mb
     public static final int DEFAULT_GROUPBY_ESTIMATED_DISTINCT_VALUES = 1000;
     public static final int DEFAULT_CLOCK_SKEW_INTERVAL = 2000;
     public static final boolean DEFAULT_INDEX_FAILURE_HANDLING_REBUILD = true; // auto rebuild on
-    public static final long DEFAULT_INDEX_FAILURE_HANDLING_REBUILD_INTERVAL = 10000; // 10 secs
-    public static final long DEFAULT_INDEX_FAILURE_HANDLING_REBUILD_OVERLAP_TIME = 300000; // 5 mins
+    public static final boolean DEFAULT_INDEX_FAILURE_BLOCK_WRITE = false; 
+    public static final boolean DEFAULT_INDEX_FAILURE_DISABLE_INDEX = true; 
+    public static final long DEFAULT_INDEX_FAILURE_HANDLING_REBUILD_INTERVAL = 60000; // 60 secs
+    public static final long DEFAULT_INDEX_FAILURE_HANDLING_REBUILD_OVERLAP_TIME = 1; // 1 ms
+    public static final long DEFAULT_INDEX_REBUILD_QUERY_TIMEOUT = 30000 * 60; // 30 mins
+    public static final long DEFAULT_INDEX_REBUILD_RPC_TIMEOUT = 30000 * 60; // 30 mins
+    public static final long DEFAULT_INDEX_REBUILD_CLIENT_SCANNER_TIMEOUT = 30000 * 60; // 30 mins
+    public static final int DEFAULT_INDEX_REBUILD_RPC_RETRIES_COUNTER = 1; // 1 retry at rpc level
+    public static final int DEFAULT_INDEX_REBUILD_DISABLE_TIMESTAMP_THRESHOLD = 30000 * 60; // 30 mins
 
     /**
      * HConstants#HIGH_QOS is the max we will see to a standard table. We go higher to differentiate
@@ -168,6 +213,11 @@ public class QueryServicesOptions {
     // compression we're getting)
     public static final long DEFAULT_STATS_GUIDEPOST_WIDTH_BYTES = 3* 100 * 1024 *1024;
     public static final boolean DEFAULT_STATS_USE_CURRENT_TIME = true;
+    public static final boolean DEFAULT_RUN_UPDATE_STATS_ASYNC = true;
+    public static final boolean DEFAULT_COMMIT_STATS_ASYNC = true;
+    public static final int DEFAULT_STATS_POOL_SIZE = 4;
+    // Maximum size (in bytes) that cached table stats should take upm
+    public static final long DEFAULT_STATS_MAX_CACHE_SIZE = 256 * 1024 * 1024;
 
     public static final boolean DEFAULT_USE_REVERSE_SCAN = true;
 
@@ -180,6 +230,7 @@ public class QueryServicesOptions {
      */
     public static final int DEFAULT_COPROCESSOR_PRIORITY = Coprocessor.PRIORITY_SYSTEM/2 + Coprocessor.PRIORITY_USER/2; // Divide individually to prevent any overflow
     public static final boolean DEFAULT_EXPLAIN_CHUNK_COUNT = true;
+    public static final boolean DEFAULT_EXPLAIN_ROW_COUNT = true;
     public static final boolean DEFAULT_ALLOW_ONLINE_TABLE_SCHEMA_UPDATE = true;
     public static final int DEFAULT_RETRIES_FOR_SCHEMA_UPDATE_CHECK = 10;
     public static final long DEFAULT_DELAY_FOR_SCHEMA_UPDATE_CHECK = 5 * 1000; // 5 seconds.
@@ -187,11 +238,17 @@ public class QueryServicesOptions {
     public static final boolean DEFAULT_STORE_NULLS = false;
 
     // TODO Change this to true as part of PHOENIX-1543
+    // We'll also need this for transactions to work correctly
     public static final boolean DEFAULT_AUTO_COMMIT = false;
+    public static final boolean DEFAULT_TABLE_ISTRANSACTIONAL = false;
+    public static final boolean DEFAULT_TRANSACTIONS_ENABLED = false;
     public static final boolean DEFAULT_IS_GLOBAL_METRICS_ENABLED = true;
-    
+
+    public static final boolean DEFAULT_TRANSACTIONAL = false;
+    public static final boolean DEFAULT_AUTO_FLUSH = false;
+
     private static final String DEFAULT_CLIENT_RPC_CONTROLLER_FACTORY = ClientRpcControllerFactory.class.getName();
-    
+
     public static final String DEFAULT_CONSISTENCY_LEVEL = Consistency.STRONG.toString();
 
     public static final boolean DEFAULT_USE_BYTE_BASED_REGEX = false;
@@ -199,6 +256,64 @@ public class QueryServicesOptions {
     public static final boolean DEFAULT_ALLOW_USER_DEFINED_FUNCTIONS = false;
     public static final boolean DEFAULT_REQUEST_LEVEL_METRICS_ENABLED = false;
     public static final boolean DEFAULT_ALLOW_VIEWS_ADD_NEW_CF_BASE_TABLE = true;
+    public static final int DEFAULT_MAX_VERSIONS_TRANSACTIONAL = Integer.MAX_VALUE;
+
+    public static final boolean DEFAULT_RETURN_SEQUENCE_VALUES = false;
+    public static final String DEFAULT_EXTRA_JDBC_ARGUMENTS = "";
+
+    public static final long DEFAULT_INDEX_POPULATION_SLEEP_TIME = 5000;
+
+    // QueryServer defaults -- ensure ThinClientUtil is also updated since phoenix-queryserver-client
+    // doesn't depend on phoenix-core.
+    public static final String DEFAULT_QUERY_SERVER_SERIALIZATION = "PROTOBUF";
+    public static final int DEFAULT_QUERY_SERVER_HTTP_PORT = 8765;
+    public static final long DEFAULT_QUERY_SERVER_UGI_CACHE_MAX_SIZE = 1000L;
+    public static final int DEFAULT_QUERY_SERVER_UGI_CACHE_INITIAL_SIZE = 100;
+    public static final int DEFAULT_QUERY_SERVER_UGI_CACHE_CONCURRENCY = 10;
+    public static final boolean DEFAULT_QUERY_SERVER_SPNEGO_AUTH_DISABLED = false;
+
+    public static final boolean DEFAULT_RENEW_LEASE_ENABLED = true;
+    public static final int DEFAULT_RUN_RENEW_LEASE_FREQUENCY_INTERVAL_MILLISECONDS =
+            DEFAULT_HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD / 2;
+    public static final int DEFAULT_RENEW_LEASE_THRESHOLD_MILLISECONDS =
+            (3 * DEFAULT_HBASE_CLIENT_SCANNER_TIMEOUT_PERIOD) / 4;
+    public static final int DEFAULT_RENEW_LEASE_THREAD_POOL_SIZE = 10;
+    public static final boolean DEFAULT_LOCAL_INDEX_CLIENT_UPGRADE = true;
+    public static final float DEFAULT_LIMITED_QUERY_SERIAL_THRESHOLD = 0.2f;
+
+    public static final boolean DEFAULT_INDEX_ASYNC_BUILD_ENABLED = true;
+
+    public static final String DEFAULT_CLIENT_CACHE_ENCODING = PTableRefFactory.Encoding.OBJECT.toString();
+    public static final boolean DEFAULT_AUTO_UPGRADE_ENABLED = true;
+    public static final int DEFAULT_CLIENT_CONNECTION_CACHE_MAX_DURATION = 86400000;
+    public static final int DEFAULT_COLUMN_ENCODED_BYTES = QualifierEncodingScheme.TWO_BYTE_QUALIFIERS.getSerializedMetadataValue();
+    public static final String DEFAULT_IMMUTABLE_STORAGE_SCHEME = ImmutableStorageScheme.SINGLE_CELL_ARRAY_WITH_OFFSETS.toString();
+    public static final String DEFAULT_MULTITENANT_IMMUTABLE_STORAGE_SCHEME = ImmutableStorageScheme.ONE_CELL_PER_COLUMN.toString();
+
+    //by default, max connections from one client to one cluster is unlimited
+    public static final int DEFAULT_CLIENT_CONNECTION_MAX_ALLOWED_CONNECTIONS = 0;
+    public static final boolean DEFAULT_STATS_COLLECTION_ENABLED = true;
+    public static final boolean DEFAULT_USE_STATS_FOR_PARALLELIZATION = true;
+
+    //default update cache frequency
+    public static final int DEFAULT_UPDATE_CACHE_FREQUENCY = 0;
+
+    @SuppressWarnings("serial")
+    public static final Set<String> DEFAULT_QUERY_SERVER_SKIP_WORDS = new HashSet<String>() {
+      {
+        add("secret");
+        add("passwd");
+        add("password");
+        add("credential");
+      }
+    };
+    public static final String DEFAULT_SCHEMA = null;
+    public static final String DEFAULT_UPLOAD_BINARY_DATA_TYPE_ENCODING = "BASE64"; // for backward compatibility, till
+                                                                                    // 4.10, psql and CSVBulkLoad
+                                                                                    // expects binary data to be base 64
+                                                                                    // encoded
+    // RS -> RS calls for upsert select statements are enabled by default
+    public static final boolean DEFAULT_ENABLE_SERVER_UPSERT_SELECT = true;
 
     private final Configuration config;
 
@@ -221,6 +336,8 @@ public class QueryServicesOptions {
         Configuration config = HBaseFactoryProvider.getConfigurationFactory().getConfiguration();
         QueryServicesOptions options = new QueryServicesOptions(config)
             .setIfUnset(STATS_USE_CURRENT_TIME_ATTRIB, DEFAULT_STATS_USE_CURRENT_TIME)
+            .setIfUnset(RUN_UPDATE_STATS_ASYNC, DEFAULT_RUN_UPDATE_STATS_ASYNC)
+            .setIfUnset(COMMIT_STATS_ASYNC, DEFAULT_COMMIT_STATS_ASYNC)
             .setIfUnset(KEEP_ALIVE_MS_ATTRIB, DEFAULT_KEEP_ALIVE_MS)
             .setIfUnset(THREAD_POOL_SIZE_ATTRIB, DEFAULT_THREAD_POOL_SIZE)
             .setIfUnset(QUEUE_SIZE_ATTRIB, DEFAULT_QUEUE_SIZE)
@@ -256,8 +373,21 @@ public class QueryServicesOptions {
             .setIfUnset(USE_BYTE_BASED_REGEX_ATTRIB, DEFAULT_USE_BYTE_BASED_REGEX)
             .setIfUnset(FORCE_ROW_KEY_ORDER_ATTRIB, DEFAULT_FORCE_ROW_KEY_ORDER)
             .setIfUnset(COLLECT_REQUEST_LEVEL_METRICS, DEFAULT_REQUEST_LEVEL_METRICS_ENABLED)
-            .setIfUnset(ALLOW_VIEWS_ADD_NEW_CF_BASE_TABLE, DEFAULT_ALLOW_VIEWS_ADD_NEW_CF_BASE_TABLE);
-            ;
+            .setIfUnset(ALLOW_VIEWS_ADD_NEW_CF_BASE_TABLE, DEFAULT_ALLOW_VIEWS_ADD_NEW_CF_BASE_TABLE)
+            .setIfUnset(ALLOW_VIEWS_ADD_NEW_CF_BASE_TABLE, DEFAULT_ALLOW_VIEWS_ADD_NEW_CF_BASE_TABLE)
+            .setIfUnset(RENEW_LEASE_THRESHOLD_MILLISECONDS, DEFAULT_RENEW_LEASE_THRESHOLD_MILLISECONDS)
+            .setIfUnset(RUN_RENEW_LEASE_FREQUENCY_INTERVAL_MILLISECONDS, DEFAULT_RUN_RENEW_LEASE_FREQUENCY_INTERVAL_MILLISECONDS)
+            .setIfUnset(RENEW_LEASE_THREAD_POOL_SIZE, DEFAULT_RENEW_LEASE_THREAD_POOL_SIZE)
+            .setIfUnset(IS_NAMESPACE_MAPPING_ENABLED, DEFAULT_IS_NAMESPACE_MAPPING_ENABLED)
+            .setIfUnset(IS_SYSTEM_TABLE_MAPPED_TO_NAMESPACE, DEFAULT_IS_SYSTEM_TABLE_MAPPED_TO_NAMESPACE)
+            .setIfUnset(LOCAL_INDEX_CLIENT_UPGRADE_ATTRIB, DEFAULT_LOCAL_INDEX_CLIENT_UPGRADE)
+            .setIfUnset(AUTO_UPGRADE_ENABLED, DEFAULT_AUTO_UPGRADE_ENABLED)
+            .setIfUnset(UPLOAD_BINARY_DATA_TYPE_ENCODING, DEFAULT_UPLOAD_BINARY_DATA_TYPE_ENCODING)
+            .setIfUnset(TRACING_ENABLED, DEFAULT_TRACING_ENABLED)
+            .setIfUnset(TRACING_BATCH_SIZE, DEFAULT_TRACING_BATCH_SIZE)
+            .setIfUnset(TRACING_THREAD_POOL_SIZE, DEFAULT_TRACING_THREAD_POOL_SIZE)
+            .setIfUnset(STATS_COLLECTION_ENABLED, DEFAULT_STATS_COLLECTION_ENABLED)
+            .setIfUnset(USE_STATS_FOR_PARALLELIZATION, DEFAULT_USE_STATS_FOR_PARALLELIZATION);
         // HBase sets this to 1, so we reset it to something more appropriate.
         // Hopefully HBase will change this, because we can't know if a user set
         // it to 1, so we'll change it.
@@ -359,6 +489,7 @@ public class QueryServicesOptions {
         return set(MAX_MUTATION_SIZE_ATTRIB, maxMutateSize);
     }
 
+    @Deprecated
     public QueryServicesOptions setMutateBatchSize(int mutateBatchSize) {
         return set(MUTATE_BATCH_SIZE_ATTRIB, mutateBatchSize);
     }
@@ -378,7 +509,6 @@ public class QueryServicesOptions {
     public QueryServicesOptions setGroupBySpillNumSpillFiles(long num) {
         return set(GROUPBY_SPILL_FILES_ATTRIB, num);
     }
-
 
     private QueryServicesOptions set(String name, boolean value) {
         config.set(name, Boolean.toString(value));
@@ -424,6 +554,7 @@ public class QueryServicesOptions {
         return config.getInt(MAX_MUTATION_SIZE_ATTRIB, DEFAULT_MAX_MUTATION_SIZE);
     }
 
+    @Deprecated
     public int getMutateBatchSize() {
         return config.getInt(MUTATE_BATCH_SIZE_ATTRIB, DEFAULT_MUTATE_BATCH_SIZE);
     }
@@ -451,7 +582,33 @@ public class QueryServicesOptions {
     public int getSpillableGroupByNumSpillFiles() {
         return config.getInt(GROUPBY_SPILL_FILES_ATTRIB, DEFAULT_GROUPBY_SPILL_FILES);
     }
-    
+
+    public boolean isTracingEnabled() {
+        return config.getBoolean(TRACING_ENABLED, DEFAULT_TRACING_ENABLED);
+    }
+
+    public QueryServicesOptions setTracingEnabled(boolean enable) {
+        config.setBoolean(TRACING_ENABLED, enable);
+        return this;
+    }
+
+    public int getTracingThreadPoolSize() {
+        return config.getInt(TRACING_THREAD_POOL_SIZE, DEFAULT_TRACING_THREAD_POOL_SIZE);
+    }
+
+    public int getTracingBatchSize() {
+        return config.getInt(TRACING_BATCH_SIZE, DEFAULT_TRACING_BATCH_SIZE);
+    }
+
+    public int getTracingTraceBufferSize() {
+        return config.getInt(TRACING_TRACE_BUFFER_SIZE, DEFAULT_TRACING_TRACE_BUFFER_SIZE);
+    }
+
+    public String getTableName() {
+        return config.get(TRACING_STATS_TABLE_NAME_ATTRIB, DEFAULT_TRACING_STATS_TABLE_NAME);
+    }
+
+
     public boolean isGlobalMetricsEnabled() {
         return config.getBoolean(GLOBAL_METRICS_ENABLED, DEFAULT_IS_GLOBAL_METRICS_ENABLED);
     }
@@ -463,7 +620,6 @@ public class QueryServicesOptions {
     public int getScanCacheSize() {
         return config.getInt(SCAN_CACHE_SIZE_ATTRIB, DEFAULT_SCAN_CACHE_SIZE);
     }
-
 
     public QueryServicesOptions setMaxServerCacheTTLMs(int ttl) {
         return set(MAX_SERVER_CACHE_TIME_TO_LIVE_MS_ATTRIB, ttl);
@@ -478,7 +634,7 @@ public class QueryServicesOptions {
     }
 
     public QueryServicesOptions setRegionServerLeasePeriodMs(int period) {
-        return set(REGIONSERVER_LEASE_PERIOD_ATTRIB, period);
+        return set(HBASE_CLIENT_SCANNER_TIMEOUT_ATTRIB, period);
     }
 
     public QueryServicesOptions setRpcTimeoutMs(int timeout) {
@@ -519,6 +675,16 @@ public class QueryServicesOptions {
         return this;
     }
 
+    public QueryServicesOptions setTransactionsEnabled(boolean transactionsEnabled) {
+        config.setBoolean(TRANSACTIONS_ENABLED, transactionsEnabled);
+        return this;
+    }
+
+    public QueryServicesOptions setExplainRowCount(boolean showRowCount) {
+        config.setBoolean(EXPLAIN_ROW_COUNT_ATTRIB, showRowCount);
+        return this;
+    }
+
     public QueryServicesOptions setAllowOnlineSchemaUpdate(boolean allow) {
         config.setBoolean(ALLOW_ONLINE_TABLE_SCHEMA_UPDATE, allow);
         return this;
@@ -532,9 +698,9 @@ public class QueryServicesOptions {
     public QueryServicesOptions setDelayInMillisForSchemaChangeCheck(long delayInMillis) {
         config.setLong(DELAY_FOR_SCHEMA_UPDATE_CHECK, delayInMillis);
         return this;
-    
+
     }
-    
+
     public QueryServicesOptions setUseByteBasedRegex(boolean flag) {
         config.setBoolean(USE_BYTE_BASED_REGEX_ATTRIB, flag);
         return this;
@@ -544,4 +710,60 @@ public class QueryServicesOptions {
         config.setBoolean(FORCE_ROW_KEY_ORDER_ATTRIB, forceRowKeyOrder);
         return this;
     }
+
+    public QueryServicesOptions setExtraJDBCArguments(String extraArgs) {
+        config.set(EXTRA_JDBC_ARGUMENTS_ATTRIB, extraArgs);
+        return this;
+    }
+
+    public QueryServicesOptions setRunUpdateStatsAsync(boolean flag) {
+        config.setBoolean(RUN_UPDATE_STATS_ASYNC, flag);
+        return this;
+    }
+
+    public QueryServicesOptions setCommitStatsAsync(boolean flag) {
+        config.setBoolean(COMMIT_STATS_ASYNC, flag);
+        return this;
+    }
+
+    public QueryServicesOptions setEnableRenewLease(boolean enable) {
+        config.setBoolean(RENEW_LEASE_ENABLED, enable);
+        return this;
+    }
+
+    public QueryServicesOptions setIndexHandlerCount(int count) {
+        config.setInt(QueryServices.INDEX_HANDLER_COUNT_ATTRIB, count);
+        return this;
+    }
+
+    public QueryServicesOptions setMetadataHandlerCount(int count) {
+        config.setInt(QueryServices.METADATA_HANDLER_COUNT_ATTRIB, count);
+        return this;
+    }
+
+    public QueryServicesOptions setHConnectionPoolCoreSize(int count) {
+        config.setInt(QueryServices.HCONNECTION_POOL_CORE_SIZE, count);
+        return this;
+    }
+
+    public QueryServicesOptions setHConnectionPoolMaxSize(int count) {
+        config.setInt(QueryServices.HCONNECTION_POOL_MAX_SIZE, count);
+        return this;
+    }
+
+    public QueryServicesOptions setMaxThreadsPerHTable(int count) {
+        config.setInt(QueryServices.HTABLE_MAX_THREADS, count);
+        return this;
+    }
+
+    public QueryServicesOptions setDefaultIndexPopulationWaitTime(long waitTime) {
+        config.setLong(INDEX_POPULATION_SLEEP_TIME, waitTime);
+        return this;
+    }
+
+    public QueryServicesOptions setUseStatsForParallelization(boolean flag) {
+        config.setBoolean(USE_STATS_FOR_PARALLELIZATION, flag);
+        return this;
+    }
+
 }

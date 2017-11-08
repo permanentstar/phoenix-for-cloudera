@@ -17,11 +17,11 @@
  */
 package org.apache.phoenix.compile;
 
-import java.sql.ParameterMetaData;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.List;
 
+import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.phoenix.cache.ServerCacheClient.ServerCache;
@@ -32,22 +32,27 @@ import org.apache.phoenix.execute.AggregatePlan;
 import org.apache.phoenix.execute.MutationState;
 import org.apache.phoenix.iterate.ResultIterator;
 import org.apache.phoenix.jdbc.PhoenixConnection;
-import org.apache.phoenix.jdbc.PhoenixParameterMetaData;
 import org.apache.phoenix.jdbc.PhoenixStatement;
+import org.apache.phoenix.jdbc.PhoenixStatement.Operation;
 import org.apache.phoenix.parse.PFunction;
+import org.apache.phoenix.parse.PSchema;
 import org.apache.phoenix.parse.SelectStatement;
 import org.apache.phoenix.query.QueryConstants;
 import org.apache.phoenix.schema.AmbiguousColumnException;
 import org.apache.phoenix.schema.ColumnFamilyNotFoundException;
 import org.apache.phoenix.schema.ColumnNotFoundException;
 import org.apache.phoenix.schema.ColumnRef;
+import org.apache.phoenix.schema.FunctionNotFoundException;
 import org.apache.phoenix.schema.PColumn;
 import org.apache.phoenix.schema.PColumnFamily;
-import org.apache.phoenix.schema.types.PLong;
+import org.apache.phoenix.schema.SchemaNotFoundException;
 import org.apache.phoenix.schema.TableNotFoundException;
 import org.apache.phoenix.schema.TableRef;
 import org.apache.phoenix.schema.tuple.Tuple;
+import org.apache.phoenix.schema.types.PLong;
+import org.apache.phoenix.util.EncodedColumnsUtil;
 import org.apache.phoenix.util.ScanUtil;
+import org.apache.phoenix.util.TransactionUtil;
 
 import com.google.common.collect.Lists;
 
@@ -66,7 +71,7 @@ import com.google.common.collect.Lists;
  */
 public class PostDDLCompiler {
     private final PhoenixConnection connection;
-    private final StatementContext context; // bogus context
+    private final Scan scan;
 
     public PostDDLCompiler(PhoenixConnection connection) {
         this(connection, new Scan());
@@ -74,34 +79,68 @@ public class PostDDLCompiler {
 
     public PostDDLCompiler(PhoenixConnection connection, Scan scan) {
         this.connection = connection;
-        this.context = new StatementContext(new PhoenixStatement(connection), scan);
+        this.scan = scan;
         scan.setAttribute(BaseScannerRegionObserver.UNGROUPED_AGG, QueryConstants.TRUE);
     }
 
-    public MutationPlan compile(final List<TableRef> tableRefs, final byte[] emptyCF, final byte[] projectCF, final List<PColumn> deleteList,
+    public MutationPlan compile(final List<TableRef> tableRefs, final byte[] emptyCF, final List<byte[]> projectCFs, final List<PColumn> deleteList,
             final long timestamp) throws SQLException {
-        
-        return new MutationPlan() {
-            
-            @Override
-            public PhoenixConnection getConnection() {
-                return connection;
-            }
-            
-            @Override
-            public ParameterMetaData getParameterMetaData() {
-                return PhoenixParameterMetaData.EMPTY_PARAMETER_META_DATA;
-            }
-            
-            @Override
-            public ExplainPlan getExplainPlan() throws SQLException {
-                return ExplainPlan.EMPTY_PLAN;
-            }
+        PhoenixStatement statement = new PhoenixStatement(connection);
+        final StatementContext context = new StatementContext(
+                statement, 
+                new ColumnResolver() {
+
+                    @Override
+                    public List<TableRef> getTables() {
+                        return tableRefs;
+                    }
+
+                    @Override
+                    public TableRef resolveTable(String schemaName, String tableName) throws SQLException {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
+                    public ColumnRef resolveColumn(String schemaName, String tableName, String colName)
+                            throws SQLException {
+                        throw new UnsupportedOperationException();
+                    }
+
+					@Override
+					public List<PFunction> getFunctions() {
+						return Collections.<PFunction>emptyList();
+					}
+
+					@Override
+					public PFunction resolveFunction(String functionName)
+							throws SQLException {
+						throw new FunctionNotFoundException(functionName);
+					}
+
+					@Override
+					public boolean hasUDFs() {
+						return false;
+					}
+
+					@Override
+					public PSchema resolveSchema(String schemaName) throws SQLException {
+						throw new SchemaNotFoundException(schemaName);
+					}
+
+					@Override
+					public List<PSchema> getSchemas() {
+						throw new UnsupportedOperationException();
+					}
+                    
+                },
+                scan,
+                new SequenceManager(statement));
+        return new BaseMutationPlan(context, Operation.UPSERT /* FIXME */) {
             
             @Override
             public MutationState execute() throws SQLException {
                 if (tableRefs.isEmpty()) {
-                    return null;
+                    return new MutationState(0, 1000, connection);
                 }
                 boolean wasAutoCommit = connection.getAutoCommit();
                 try {
@@ -138,8 +177,8 @@ public class PostDDLCompiler {
                             @Override
                             public ColumnRef resolveColumn(String schemaName, String tableName, String colName) throws SQLException {
                                 PColumn column = tableName != null
-                                        ? tableRef.getTable().getColumnFamily(tableName).getColumn(colName)
-                                        : tableRef.getTable().getColumn(colName);
+                                        ? tableRef.getTable().getColumnFamily(tableName).getPColumnForColumnName(colName)
+                                        : tableRef.getTable().getColumnForColumnName(colName);
                                 return new ColumnRef(tableRef, column.getPosition());
                             }
                             
@@ -151,13 +190,31 @@ public class PostDDLCompiler {
                             @Override
                             public boolean hasUDFs() {
                                 return false;
-                            };
+                            }
+
+                            @Override
+                            public List<PSchema> getSchemas() {
+                                throw new UnsupportedOperationException();
+                            }
+
+                            @Override
+                            public PSchema resolveSchema(String schemaName) throws SQLException {
+                                throw new SchemaNotFoundException(schemaName);
+                            }
                         };
                         PhoenixStatement statement = new PhoenixStatement(connection);
                         StatementContext context = new StatementContext(statement, resolver, scan, new SequenceManager(statement));
-                        ScanUtil.setTimeRange(scan, timestamp);
+                        long ts = timestamp;
+                        // FIXME: DDL operations aren't transactional, so we're basing the timestamp on a server timestamp.
+                        // Not sure what the fix should be. We don't need conflict detection nor filtering of invalid transactions
+                        // in this case, so maybe this is ok.
+                        if (ts!=HConstants.LATEST_TIMESTAMP && tableRef.getTable().isTransactional()) {
+                            ts = TransactionUtil.convertToNanoseconds(ts);
+                        }
+                        ScanUtil.setTimeRange(scan, scan.getTimeRange().getMin(), ts);
                         if (emptyCF != null) {
                             scan.setAttribute(BaseScannerRegionObserver.EMPTY_CF, emptyCF);
+                            scan.setAttribute(BaseScannerRegionObserver.EMPTY_COLUMN_QUALIFIER, EncodedColumnsUtil.getEmptyKeyValueInfo(tableRef.getTable()).getFirst());
                         }
                         ServerCache cache = null;
                         try {
@@ -181,23 +238,27 @@ public class PostDDLCompiler {
                                     // data empty column family to stay the same, while the index empty column family
                                     // changes.
                                     PColumn column = deleteList.get(0);
+                                    byte[] cq = column.getColumnQualifierBytes();
                                     if (emptyCF == null) {
-                                        scan.addColumn(column.getFamilyName().getBytes(), column.getName().getBytes());
+                                        scan.addColumn(column.getFamilyName().getBytes(), cq);
                                     }
                                     scan.setAttribute(BaseScannerRegionObserver.DELETE_CF, column.getFamilyName().getBytes());
-                                    scan.setAttribute(BaseScannerRegionObserver.DELETE_CQ, column.getName().getBytes());
+                                    scan.setAttribute(BaseScannerRegionObserver.DELETE_CQ, cq);
                                 }
                             }
                             List<byte[]> columnFamilies = Lists.newArrayListWithExpectedSize(tableRef.getTable().getColumnFamilies().size());
-                            if (projectCF == null) {
+                            if (projectCFs == null) {
                                 for (PColumnFamily family : tableRef.getTable().getColumnFamilies()) {
                                     columnFamilies.add(family.getName().getBytes());
                                 }
                             } else {
-                                columnFamilies.add(projectCF);
+                                for (byte[] projectCF : projectCFs) {
+                                    columnFamilies.add(projectCF);
+                                }
                             }
                             // Need to project all column families into the scan, since we haven't yet created our empty key value
                             RowProjector projector = ProjectionCompiler.compile(context, SelectStatement.COUNT_ONE, GroupBy.EMPTY_GROUP_BY);
+                            context.getAggregationManager().compile(context, GroupBy.EMPTY_GROUP_BY);
                             // Explicitly project these column families and don't project the empty key value,
                             // since at this point we haven't added the empty key value everywhere.
                             if (columnFamilies != null) {
@@ -221,7 +282,8 @@ public class PostDDLCompiler {
                             } catch (AmbiguousColumnException e) {
                                 continue;
                             }
-                            QueryPlan plan = new AggregatePlan(context, select, tableRef, projector, null, OrderBy.EMPTY_ORDER_BY, null, GroupBy.EMPTY_GROUP_BY, null);
+                            QueryPlan plan = new AggregatePlan(context, select, tableRef, projector, null, null,
+                                    OrderBy.EMPTY_ORDER_BY, null, GroupBy.EMPTY_GROUP_BY, null);
                             try {
                                 ResultIterator iterator = plan.iterator();
                                 try {
@@ -257,7 +319,7 @@ public class PostDDLCompiler {
                         
                     }
                     final long count = totalMutationCount;
-                    return new MutationState(1, connection) {
+                    return new MutationState(1, 1000, connection) {
                         @Override
                         public long getUpdateCount() {
                             return count;
@@ -266,11 +328,6 @@ public class PostDDLCompiler {
                 } finally {
                     if (!wasAutoCommit) connection.setAutoCommit(wasAutoCommit);
                 }
-            }
-
-            @Override
-            public StatementContext getContext() {
-                return context;
             }
         };
     }

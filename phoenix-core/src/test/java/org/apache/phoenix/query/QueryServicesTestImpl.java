@@ -21,6 +21,7 @@ import static org.apache.phoenix.query.QueryServicesOptions.DEFAULT_SPOOL_DIRECT
 import static org.apache.phoenix.query.QueryServicesOptions.withDefaults;
 
 import org.apache.hadoop.hbase.regionserver.wal.IndexedWALEditCodec;
+import org.apache.phoenix.util.PhoenixRuntime;
 import org.apache.phoenix.util.ReadOnlyProps;
 
 
@@ -32,8 +33,7 @@ import org.apache.phoenix.util.ReadOnlyProps;
  */
 public final class QueryServicesTestImpl extends BaseQueryServicesImpl {
 
-    private static final int DEFAULT_THREAD_POOL_SIZE = 20;
-    private static final int DEFAULT_QUEUE_SIZE = 0;
+    private static final int DEFAULT_THREAD_POOL_SIZE = 10;
     // TODO: setting this down to 5mb causes insufficient memory exceptions. Need to investigate why
     private static final int DEFAULT_MAX_MEMORY_PERC = 30; // 30% of heap
     private static final int DEFAULT_THREAD_TIMEOUT_MS = 60000*5; //5min
@@ -53,6 +53,17 @@ public final class QueryServicesTestImpl extends BaseQueryServicesImpl {
     public static final long DEFAULT_MAX_CLIENT_METADATA_CACHE_SIZE =  1024L*1024L*2L; // 2 Mb
     public static final int DEFAULT_MIN_STATS_UPDATE_FREQ_MS = 0;
     public static final boolean DEFAULT_EXPLAIN_CHUNK_COUNT = false; // TODO: update explain plans in test and set to true
+    public static final boolean DEFAULT_EXPLAIN_ROW_COUNT = false; // TODO: update explain plans in test and set to true
+    public static final String DEFAULT_EXTRA_JDBC_ARGUMENTS = PhoenixRuntime.PHOENIX_TEST_DRIVER_URL_PARAM;
+    private static final boolean DEFAULT_RUN_UPDATE_STATS_ASYNC = false;
+    private static final boolean DEFAULT_COMMIT_STATS_ASYNC = false;
+    public static final int DEFAULT_INDEX_HANDLER_COUNT = 5;
+    public static final int DEFAULT_METADATA_HANDLER_COUNT = 5;
+    public static final int DEFAULT_HCONNECTION_POOL_CORE_SIZE = 10;
+    public static final int DEFAULT_HCONNECTION_POOL_MAX_SIZE = 10;
+    public static final int DEFAULT_HTABLE_MAX_THREADS = 10;
+    public static final long DEFAULT_INDEX_POPULATION_WAIT_TIME = 0;
+    public static final boolean DEFAULT_TRANSACTIONS_ENABLED = true;
     
     /**
      * Set number of salt buckets lower for sequence table during testing, as a high
@@ -68,11 +79,12 @@ public final class QueryServicesTestImpl extends BaseQueryServicesImpl {
     
     private static QueryServicesOptions getDefaultServicesOptions() {
     	return withDefaults()
+    	        .setTransactionsEnabled(DEFAULT_TRANSACTIONS_ENABLED)
     	        .setExplainChunkCount(DEFAULT_EXPLAIN_CHUNK_COUNT)
+                .setExplainRowCount(DEFAULT_EXPLAIN_ROW_COUNT)
     	        .setSequenceSaltBuckets(DEFAULT_SEQUENCE_TABLE_SALT_BUCKETS)
                 .setMinStatsUpdateFrequencyMs(DEFAULT_MIN_STATS_UPDATE_FREQ_MS)
                 .setThreadPoolSize(DEFAULT_THREAD_POOL_SIZE)
-                .setQueueSize(DEFAULT_QUEUE_SIZE)
                 .setMaxMemoryPerc(DEFAULT_MAX_MEMORY_PERC)
                 .setThreadTimeoutMs(DEFAULT_THREAD_TIMEOUT_MS)
                 .setSpoolThresholdBytes(DEFAULT_SPOOL_THRESHOLD_BYTES)
@@ -89,7 +101,16 @@ public final class QueryServicesTestImpl extends BaseQueryServicesImpl {
                 .setDropMetaData(DEFAULT_DROP_METADATA)
                 .setMaxClientMetaDataCacheSize(DEFAULT_MAX_CLIENT_METADATA_CACHE_SIZE)
                 .setMaxServerMetaDataCacheSize(DEFAULT_MAX_SERVER_METADATA_CACHE_SIZE)
-                .setForceRowKeyOrder(DEFAULT_FORCE_ROWKEY_ORDER);
+                .setForceRowKeyOrder(DEFAULT_FORCE_ROWKEY_ORDER)
+                .setExtraJDBCArguments(DEFAULT_EXTRA_JDBC_ARGUMENTS)
+                .setRunUpdateStatsAsync(DEFAULT_RUN_UPDATE_STATS_ASYNC)
+                .setCommitStatsAsync(DEFAULT_COMMIT_STATS_ASYNC)
+                .setIndexHandlerCount(DEFAULT_INDEX_HANDLER_COUNT)
+                .setMetadataHandlerCount(DEFAULT_METADATA_HANDLER_COUNT)
+                .setHConnectionPoolCoreSize(DEFAULT_HCONNECTION_POOL_CORE_SIZE)
+                .setHConnectionPoolMaxSize(DEFAULT_HCONNECTION_POOL_MAX_SIZE)
+                .setMaxThreadsPerHTable(DEFAULT_HTABLE_MAX_THREADS)
+                .setDefaultIndexPopulationWaitTime(DEFAULT_INDEX_POPULATION_WAIT_TIME);
     }
     
     public QueryServicesTestImpl(ReadOnlyProps defaultProps, ReadOnlyProps overrideProps) {

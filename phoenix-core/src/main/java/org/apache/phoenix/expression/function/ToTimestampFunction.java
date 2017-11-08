@@ -20,6 +20,7 @@ package org.apache.phoenix.expression.function;
 import java.sql.SQLException;
 import java.util.List;
 
+import org.apache.phoenix.compile.StatementContext;
 import org.apache.phoenix.expression.Expression;
 import org.apache.phoenix.parse.FunctionParseNode.Argument;
 import org.apache.phoenix.parse.FunctionParseNode.BuiltInFunction;
@@ -47,8 +48,21 @@ public class ToTimestampFunction extends ToDateFunction {
     public ToTimestampFunction() {
     }
 
+    public ToTimestampFunction(List<Expression> children, StatementContext context) throws SQLException {
+        super(children, context);
+    }
+
     public ToTimestampFunction(List<Expression> children, String dateFormat, String timeZoneId) throws SQLException {
         super(children, dateFormat, timeZoneId);
+    }
+    
+    @Override
+    public ToTimestampFunction clone(List<Expression> children) {
+    	try {
+            return new ToTimestampFunction(children, dateFormat, timeZoneId);
+        } catch (Exception e) {
+            throw new RuntimeException(e); // Impossible, since it was originally constructed this way
+        }
     }
 
     @Override

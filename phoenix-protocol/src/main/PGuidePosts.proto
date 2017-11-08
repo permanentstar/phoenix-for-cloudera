@@ -1,6 +1,4 @@
 /*
- * Copyright 2010 The Apache Software Foundation
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -27,4 +25,9 @@ message PGuidePosts {
   repeated bytes guidePosts = 1;
   optional int64 byteCount = 2;
   optional int64 rowCount = 3;
+  optional int32 maxLength = 4;
+  optional int32 encodedGuidePostsCount = 5;
+  optional bytes encodedGuidePosts = 6;
+  repeated int64 byteCounts = 7;
+  repeated int64 rowCounts = 8;
 }

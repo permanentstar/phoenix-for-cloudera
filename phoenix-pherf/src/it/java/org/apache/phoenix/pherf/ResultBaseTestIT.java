@@ -18,16 +18,17 @@
 
 package org.apache.phoenix.pherf;
 
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Properties;
+
 import org.apache.phoenix.end2end.BaseHBaseManagedTimeIT;
 import org.apache.phoenix.pherf.configuration.XMLConfigParser;
 import org.apache.phoenix.pherf.result.ResultUtil;
 import org.apache.phoenix.pherf.schema.SchemaReader;
 import org.apache.phoenix.pherf.util.PhoenixUtil;
+import org.junit.AfterClass;
 import org.junit.BeforeClass;
-
-import java.nio.file.Path;
-import java.util.List;
-import java.util.Properties;
 
 public class ResultBaseTestIT extends BaseHBaseManagedTimeIT {
     protected static final String matcherScenario = ".*scenario/.*test.*xml";
@@ -45,12 +46,14 @@ public class ResultBaseTestIT extends BaseHBaseManagedTimeIT {
         PherfConstants constants = PherfConstants.create();
         properties = constants.getProperties(PherfConstants.PHERF_PROPERTIES, false);
         String dir = properties.getProperty("pherf.default.results.dir");
-        String targetDir = "target/" + dir;
-        properties.setProperty("pherf.default.results.dir", targetDir);
-        resultUtil.ensureBaseDirExists(targetDir);
+        resultUtil.ensureBaseDirExists(dir);
 
-        util.setZookeeper("localhost");
+        PhoenixUtil.setZookeeper("localhost");
         reader = new SchemaReader(util, matcherSchema);
         parser = new XMLConfigParser(matcherScenario);
+    }
+
+    @AfterClass public static void tearDown() throws Exception {
+    	resultUtil.deleteDir(properties.getProperty("pherf.default.results.dir"));
     }
 }

@@ -50,8 +50,12 @@ public interface QueryServices extends SQLCloseable {
     public static final String AUTO_COMMIT_ATTRIB = "phoenix.connection.autoCommit";
     // consistency configuration setting
     public static final String CONSISTENCY_ATTRIB = "phoenix.connection.consistency";
+    public static final String SCHEMA_ATTRIB = "phoenix.connection.schema";
+    public static final String IS_NAMESPACE_MAPPING_ENABLED  = "phoenix.schema.isNamespaceMappingEnabled";
+    public static final String IS_SYSTEM_TABLE_MAPPED_TO_NAMESPACE  = "phoenix.schema.mapSystemTablesToNamespace";
     // joni byte regex engine setting
     public static final String USE_BYTE_BASED_REGEX_ATTRIB = "phoenix.regex.byteBased";
+    public static final String DRIVER_SHUTDOWN_TIMEOUT_MS = "phoenix.shutdown.timeoutMs";
 
     /**
 	 * max size to spool the the result into
@@ -82,13 +86,17 @@ public interface QueryServices extends SQLCloseable {
     public static final String CALL_QUEUE_ROUND_ROBIN_ATTRIB = "ipc.server.callqueue.roundrobin";
     public static final String SCAN_CACHE_SIZE_ATTRIB = "hbase.client.scanner.caching";
     public static final String MAX_MUTATION_SIZE_ATTRIB = "phoenix.mutate.maxSize";
+    public static final String MAX_MUTATION_SIZE_BYTES_ATTRIB = "phoenix.mutate.maxSizeBytes";
+
     public static final String MUTATE_BATCH_SIZE_ATTRIB = "phoenix.mutate.batchSize";
+    public static final String MUTATE_BATCH_SIZE_BYTES_ATTRIB = "phoenix.mutate.batchSizeBytes";
     public static final String MAX_SERVER_CACHE_TIME_TO_LIVE_MS_ATTRIB = "phoenix.coprocessor.maxServerCacheTimeToLiveMs";
     
-    // Deprecated. Use FORCE_ROW_KEY_ORDER instead.
+    @Deprecated // Use FORCE_ROW_KEY_ORDER instead.
     public static final String ROW_KEY_ORDER_SALTED_TABLE_ATTRIB  = "phoenix.query.rowKeyOrderSaltedTable";
     
     public static final String USE_INDEXES_ATTRIB  = "phoenix.query.useIndexes";
+    @Deprecated // use the IMMUTABLE keyword while creating the table
     public static final String IMMUTABLE_ROWS_ATTRIB  = "phoenix.mutate.immutableRows";
     public static final String INDEX_MUTATE_BATCH_SIZE_THRESHOLD_ATTRIB  = "phoenix.index.mutableBatchSizeThreshold";
     public static final String DROP_METADATA_ATTRIB  = "phoenix.schema.dropMetaData";
@@ -101,15 +109,14 @@ public interface QueryServices extends SQLCloseable {
 
     public static final String MASTER_INFO_PORT_ATTRIB = "hbase.master.info.port";
     public static final String REGIONSERVER_INFO_PORT_ATTRIB = "hbase.regionserver.info.port";
-    public static final String REGIONSERVER_LEASE_PERIOD_ATTRIB = "hbase.regionserver.lease.period";
+    public static final String HBASE_CLIENT_SCANNER_TIMEOUT_ATTRIB = "hbase.client.scanner.timeout.period";
     public static final String RPC_TIMEOUT_ATTRIB = "hbase.rpc.timeout";
     public static final String DYNAMIC_JARS_DIR_KEY = "hbase.dynamic.jars.dir";
-    public static final String ZOOKEEPER_QUARUM_ATTRIB = "hbase.zookeeper.quorum";
+    public static final String ZOOKEEPER_QUORUM_ATTRIB = "hbase.zookeeper.quorum";
     public static final String ZOOKEEPER_PORT_ATTRIB = "hbase.zookeeper.property.clientPort";
     public static final String ZOOKEEPER_ROOT_NODE_ATTRIB = "zookeeper.znode.parent";
     public static final String DISTINCT_VALUE_COMPRESS_THRESHOLD_ATTRIB = "phoenix.distinct.value.compress.threshold";
     public static final String SEQUENCE_CACHE_SIZE_ATTRIB = "phoenix.sequence.cacheSize";
-    public static final String INDEX_MAX_FILESIZE_PERC_ATTRIB = "phoenix.index.maxDataFileSizePerc";
     public static final String MAX_SERVER_METADATA_CACHE_TIME_TO_LIVE_MS_ATTRIB = "phoenix.coprocessor.maxMetaDataCacheTimeToLiveMs";
     public static final String MAX_SERVER_METADATA_CACHE_SIZE_ATTRIB = "phoenix.coprocessor.maxMetaDataCacheSize";
     public static final String MAX_CLIENT_METADATA_CACHE_SIZE_ATTRIB = "phoenix.client.maxMetaDataCacheSize";
@@ -123,10 +130,24 @@ public interface QueryServices extends SQLCloseable {
 
     // A master switch if to enable auto rebuild an index which failed to be updated previously
     public static final String INDEX_FAILURE_HANDLING_REBUILD_ATTRIB = "phoenix.index.failure.handling.rebuild";
+    public static final String INDEX_FAILURE_HANDLING_REBUILD_PERIOD = "phoenix.index.failure.handling.rebuild.period";
+    public static final String INDEX_REBUILD_QUERY_TIMEOUT_ATTRIB = "phoenix.index.rebuild.query.timeout";
+    public static final String INDEX_REBUILD_RPC_TIMEOUT_ATTRIB = "phoenix.index.rebuild.rpc.timeout";
+    public static final String INDEX_REBUILD_CLIENT_SCANNER_TIMEOUT_ATTRIB = "phoenix.index.rebuild.client.scanner.timeout";
+    public static final String INDEX_REBUILD_RPC_RETRIES_COUNTER = "phoenix.index.rebuild.rpc.retries.counter";
+    public static final String INDEX_REBUILD_RPC_RETRY_PAUSE_TIME = "phoenix.index.rebuild.rpc.retry.pause";
 
     // Time interval to check if there is an index needs to be rebuild
     public static final String INDEX_FAILURE_HANDLING_REBUILD_INTERVAL_ATTRIB =
         "phoenix.index.failure.handling.rebuild.interval";
+    
+    public static final String INDEX_FAILURE_HANDLING_REBUILD_NUMBER_OF_BATCHES_PER_TABLE = "phoenix.index.rebuild.batch.perTable";
+    // If index disable timestamp is older than this threshold, then index rebuild task won't attempt to rebuild it
+    public static final String INDEX_REBUILD_DISABLE_TIMESTAMP_THRESHOLD = "phoenix.index.rebuild.disabletimestamp.threshold";
+
+    // Block writes to data table when index write fails
+    public static final String INDEX_FAILURE_BLOCK_WRITE = "phoenix.index.failure.block.write";
+    public static final String INDEX_FAILURE_DISABLE_INDEX = "phoenix.index.failure.disable.index";
 
     // Index will be partially re-built from index disable time stamp - following overlap time
     public static final String INDEX_FAILURE_HANDLING_REBUILD_OVERLAP_TIME_ATTRIB =
@@ -141,6 +162,10 @@ public interface QueryServices extends SQLCloseable {
     public static final String TRACING_PROBABILITY_THRESHOLD_ATTRIB = "phoenix.trace.probability.threshold";
     public static final String TRACING_STATS_TABLE_NAME_ATTRIB = "phoenix.trace.statsTableName";
     public static final String TRACING_CUSTOM_ANNOTATION_ATTRIB_PREFIX = "phoenix.trace.custom.annotation.";
+    public static final String TRACING_ENABLED = "phoenix.trace.enabled";
+    public static final String TRACING_BATCH_SIZE = "phoenix.trace.batchSize";
+    public static final String TRACING_THREAD_POOL_SIZE = "phoenix.trace.threadPoolSize";
+    public static final String TRACING_TRACE_BUFFER_SIZE = "phoenix.trace.traceBufferSize";
 
     public static final String USE_REVERSE_SCAN_ATTRIB = "phoenix.query.useReverseScan";
 
@@ -150,17 +175,34 @@ public interface QueryServices extends SQLCloseable {
     public static final String STATS_GUIDEPOST_WIDTH_BYTES_ATTRIB = "phoenix.stats.guidepost.width";
     public static final String STATS_GUIDEPOST_PER_REGION_ATTRIB = "phoenix.stats.guidepost.per.region";
     public static final String STATS_USE_CURRENT_TIME_ATTRIB = "phoenix.stats.useCurrentTime";
+    
+    @Deprecated // use STATS_COLLECTION_ENABLED config instead
+    public static final String STATS_ENABLED_ATTRIB = "phoenix.stats.enabled";
+
+    public static final String RUN_UPDATE_STATS_ASYNC = "phoenix.update.stats.command.async";
+    public static final String STATS_SERVER_POOL_SIZE = "phoenix.stats.pool.size";
+    public static final String COMMIT_STATS_ASYNC = "phoenix.stats.commit.async";
+    // Maximum size in bytes taken up by cached table stats in the client
+    public static final String STATS_MAX_CACHE_SIZE = "phoenix.stats.cache.maxSize";
 
     public static final String SEQUENCE_SALT_BUCKETS_ATTRIB = "phoenix.sequence.saltBuckets";
     public static final String COPROCESSOR_PRIORITY_ATTRIB = "phoenix.coprocessor.priority";
     public static final String EXPLAIN_CHUNK_COUNT_ATTRIB = "phoenix.explain.displayChunkCount";
+    public static final String EXPLAIN_ROW_COUNT_ATTRIB = "phoenix.explain.displayRowCount";
     public static final String ALLOW_ONLINE_TABLE_SCHEMA_UPDATE = "hbase.online.schema.update.enable";
     public static final String NUM_RETRIES_FOR_SCHEMA_UPDATE_CHECK = "phoenix.schema.change.retries";
     public static final String DELAY_FOR_SCHEMA_UPDATE_CHECK = "phoenix.schema.change.delay";
     public static final String DEFAULT_KEEP_DELETED_CELLS_ATTRIB = "phoenix.table.default.keep.deleted.cells";
     public static final String DEFAULT_STORE_NULLS_ATTRIB = "phoenix.table.default.store.nulls";
+    public static final String DEFAULT_TABLE_ISTRANSACTIONAL_ATTRIB = "phoenix.table.istransactional.default";
     public static final String GLOBAL_METRICS_ENABLED = "phoenix.query.global.metrics.enabled";
     
+    // Transaction related configs
+    public static final String TRANSACTIONS_ENABLED = "phoenix.transactions.enabled";
+    // Controls whether or not uncommitted data is automatically sent to HBase
+    // at the end of a statement execution when transaction state is passed through.
+    public static final String AUTO_FLUSH_ATTRIB = "phoenix.transactions.autoFlush";
+
     // rpc queue configs
     public static final String INDEX_HANDLER_COUNT_ATTRIB = "phoenix.rpc.index.handler.count";
     public static final String METADATA_HANDLER_COUNT_ATTRIB = "phoenix.rpc.metadata.handler.count";
@@ -169,7 +211,65 @@ public interface QueryServices extends SQLCloseable {
     public static final String ALLOW_USER_DEFINED_FUNCTIONS_ATTRIB = "phoenix.functions.allowUserDefinedFunctions";
     public static final String COLLECT_REQUEST_LEVEL_METRICS = "phoenix.query.request.metrics.enabled";
     public static final String ALLOW_VIEWS_ADD_NEW_CF_BASE_TABLE = "phoenix.view.allowNewColumnFamily";
+    public static final String RETURN_SEQUENCE_VALUES_ATTRIB = "phoenix.sequence.returnValues";
+    public static final String EXTRA_JDBC_ARGUMENTS_ATTRIB = "phoenix.jdbc.extra.arguments";
     
+    public static final String MAX_VERSIONS_TRANSACTIONAL_ATTRIB = "phoenix.transactions.maxVersions";
+
+    // queryserver configuration keys
+    public static final String QUERY_SERVER_SERIALIZATION_ATTRIB = "phoenix.queryserver.serialization";
+    public static final String QUERY_SERVER_META_FACTORY_ATTRIB = "phoenix.queryserver.metafactory.class";
+    public static final String QUERY_SERVER_HTTP_PORT_ATTRIB = "phoenix.queryserver.http.port";
+    public static final String QUERY_SERVER_ENV_LOGGING_ATTRIB = "phoenix.queryserver.envvars.logging.disabled";
+    public static final String QUERY_SERVER_ENV_LOGGING_SKIPWORDS_ATTRIB = "phoenix.queryserver.envvars.logging.skipwords";
+    public static final String QUERY_SERVER_KEYTAB_FILENAME_ATTRIB = "phoenix.queryserver.keytab.file";
+    public static final String QUERY_SERVER_KERBEROS_PRINCIPAL_ATTRIB = "phoenix.queryserver.kerberos.principal";
+    public static final String QUERY_SERVER_DNS_NAMESERVER_ATTRIB = "phoenix.queryserver.dns.nameserver";
+    public static final String QUERY_SERVER_DNS_INTERFACE_ATTRIB = "phoenix.queryserver.dns.interface";
+    public static final String QUERY_SERVER_HBASE_SECURITY_CONF_ATTRIB = "hbase.security.authentication";
+    public static final String QUERY_SERVER_UGI_CACHE_MAX_SIZE = "phoenix.queryserver.ugi.cache.max.size";
+    public static final String QUERY_SERVER_UGI_CACHE_INITIAL_SIZE = "phoenix.queryserver.ugi.cache.initial.size";
+    public static final String QUERY_SERVER_UGI_CACHE_CONCURRENCY = "phoenix.queryserver.ugi.cache.concurrency";
+    public static final String QUERY_SERVER_KERBEROS_ALLOWED_REALMS = "phoenix.queryserver.kerberos.allowed.realms";
+    public static final String QUERY_SERVER_SPNEGO_AUTH_DISABLED_ATTRIB = "phoenix.queryserver.spnego.auth.disabled";
+
+    public static final String RENEW_LEASE_ENABLED = "phoenix.scanner.lease.renew.enabled";
+    public static final String RUN_RENEW_LEASE_FREQUENCY_INTERVAL_MILLISECONDS = "phoenix.scanner.lease.renew.interval";
+    public static final String RENEW_LEASE_THRESHOLD_MILLISECONDS = "phoenix.scanner.lease.threshold";
+    public static final String RENEW_LEASE_THREAD_POOL_SIZE = "phoenix.scanner.lease.pool.size";
+    public static final String HCONNECTION_POOL_CORE_SIZE = "hbase.hconnection.threads.core";
+    public static final String HCONNECTION_POOL_MAX_SIZE = "hbase.hconnection.threads.max";
+    public static final String HTABLE_MAX_THREADS = "hbase.htable.threads.max";
+    // time to wait before running second index population upsert select (so that any pending batches of rows on region server are also written to index)
+    public static final String INDEX_POPULATION_SLEEP_TIME = "phoenix.index.population.wait.time";
+    public static final String LOCAL_INDEX_CLIENT_UPGRADE_ATTRIB = "phoenix.client.localIndexUpgrade";
+    public static final String LIMITED_QUERY_SERIAL_THRESHOLD = "phoenix.limited.query.serial.threshold";
+    
+    //currently BASE64 and ASCII is supported
+    public static final String UPLOAD_BINARY_DATA_TYPE_ENCODING = "phoenix.upload.binaryDataType.encoding";
+
+    public static final String INDEX_ASYNC_BUILD_ENABLED = "phoenix.index.async.build.enabled";
+    
+    public static final String CLIENT_CACHE_ENCODING = "phoenix.table.client.cache.encoding";
+    public static final String AUTO_UPGRADE_ENABLED = "phoenix.autoupgrade.enabled";
+
+    public static final String CLIENT_CONNECTION_CACHE_MAX_DURATION_MILLISECONDS =
+        "phoenix.client.connection.max.duration";
+
+    //max number of connections from a single client to a single cluster. 0 is unlimited.
+    public static final String CLIENT_CONNECTION_MAX_ALLOWED_CONNECTIONS =
+        "phoenix.client.connection.max.allowed.connections";
+    public static final String DEFAULT_COLUMN_ENCODED_BYTES_ATRRIB  = "phoenix.default.column.encoded.bytes.attrib";
+    public static final String DEFAULT_IMMUTABLE_STORAGE_SCHEME_ATTRIB  = "phoenix.default.immutable.storage.scheme";
+    public static final String DEFAULT_MULTITENANT_IMMUTABLE_STORAGE_SCHEME_ATTRIB  = "phoenix.default.multitenant.immutable.storage.scheme";
+    public static final String STATS_COLLECTION_ENABLED = "phoenix.stats.collection.enabled";
+    public static final String USE_STATS_FOR_PARALLELIZATION = "phoenix.use.stats.parallelization";
+
+    // whether to enable server side RS -> RS calls for upsert select statements
+    public static final String ENABLE_SERVER_UPSERT_SELECT ="phoenix.client.enable.server.upsert.select";
+
+    //Update Cache Frequency default config attribute
+    public static final String DEFAULT_UPDATE_CACHE_FREQUENCY_ATRRIB  = "phoenix.default.update.cache.frequency";
 
     /**
      * Get executor service used for parallel scans

@@ -17,7 +17,7 @@
  */
 package org.apache.phoenix.execute;
 
-import static org.apache.phoenix.query.QueryConstants.*;
+import static org.apache.phoenix.query.QueryConstants.UNGROUPED_AGG_ROW_KEY;
 
 import java.io.IOException;
 import java.sql.SQLException;
@@ -26,6 +26,7 @@ import java.util.List;
 
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.phoenix.compile.ExplainPlan;
 import org.apache.phoenix.compile.GroupByCompiler.GroupBy;
@@ -37,6 +38,7 @@ import org.apache.phoenix.coprocessor.BaseScannerRegionObserver;
 import org.apache.phoenix.expression.Expression;
 import org.apache.phoenix.expression.OrderByExpression;
 import org.apache.phoenix.expression.aggregator.Aggregators;
+import org.apache.phoenix.expression.aggregator.ClientAggregators;
 import org.apache.phoenix.expression.aggregator.ServerAggregators;
 import org.apache.phoenix.iterate.AggregatingResultIterator;
 import org.apache.phoenix.iterate.BaseGroupedAggregatingResultIterator;
@@ -46,6 +48,7 @@ import org.apache.phoenix.iterate.FilterResultIterator;
 import org.apache.phoenix.iterate.GroupedAggregatingResultIterator;
 import org.apache.phoenix.iterate.LimitingResultIterator;
 import org.apache.phoenix.iterate.LookAheadResultIterator;
+import org.apache.phoenix.iterate.OffsetResultIterator;
 import org.apache.phoenix.iterate.OrderedAggregatingResultIterator;
 import org.apache.phoenix.iterate.OrderedResultIterator;
 import org.apache.phoenix.iterate.ParallelScanGrouper;
@@ -66,23 +69,26 @@ import com.google.common.collect.Lists;
 public class ClientAggregatePlan extends ClientProcessingPlan {
     private final GroupBy groupBy;
     private final Expression having;
-    private final Aggregators serverAggregators;
-    private final Aggregators clientAggregators;
+    private final ServerAggregators serverAggregators;
+    private final ClientAggregators clientAggregators;
     
     public ClientAggregatePlan(StatementContext context, FilterableStatement statement, TableRef table, RowProjector projector,
-            Integer limit, Expression where, OrderBy orderBy, GroupBy groupBy, Expression having, QueryPlan delegate) {
-        super(context, statement, table, projector, limit, where, orderBy, delegate);
+            Integer limit, Integer offset, Expression where, OrderBy orderBy, GroupBy groupBy, Expression having, QueryPlan delegate) {
+        super(context, statement, table, projector, limit, offset, where, orderBy, delegate);
         this.groupBy = groupBy;
         this.having = having;
-        this.serverAggregators =
-                ServerAggregators.deserialize(context.getScan()
-                        .getAttribute(BaseScannerRegionObserver.AGGREGATORS), QueryServicesOptions.withDefaults().getConfiguration());
         this.clientAggregators = context.getAggregationManager().getAggregators();
+        // We must deserialize rather than clone based off of client aggregators because
+        // upon deserialization we create the server-side aggregators instead of the client-side
+        // aggregators. We use the Configuration directly here to avoid the expense of creating
+        // another one.
+        this.serverAggregators = ServerAggregators.deserialize(context.getScan()
+                        .getAttribute(BaseScannerRegionObserver.AGGREGATORS), context.getConnection().getQueryServices().getConfiguration());
     }
 
     @Override
-    public ResultIterator iterator(ParallelScanGrouper scanGrouper) throws SQLException {
-        ResultIterator iterator = delegate.iterator(scanGrouper);
+    public ResultIterator iterator(ParallelScanGrouper scanGrouper, Scan scan) throws SQLException {
+        ResultIterator iterator = delegate.iterator(scanGrouper, scan);
         if (where != null) {
             iterator = new FilterResultIterator(iterator, where);
         }
@@ -100,7 +106,7 @@ public class ClientAggregatePlan extends ClientProcessingPlan {
                 for (Expression keyExpression : keyExpressions) {
                     keyExpressionOrderBy.add(new OrderByExpression(keyExpression, false, true));
                 }
-                iterator = new OrderedResultIterator(iterator, keyExpressionOrderBy, thresholdBytes, limit, projector.getEstimatedRowByteSize());
+                iterator = new OrderedResultIterator(iterator, keyExpressionOrderBy, thresholdBytes, null, null, projector.getEstimatedRowByteSize());
             }
             aggResultIterator = new ClientGroupedAggregatingResultIterator(LookAheadResultIterator.wrap(iterator), serverAggregators, groupBy.getKeyExpressions());
             aggResultIterator = new GroupedAggregatingResultIterator(LookAheadResultIterator.wrap(aggResultIterator), clientAggregators);
@@ -116,13 +122,16 @@ public class ClientAggregatePlan extends ClientProcessingPlan {
 
         ResultIterator resultScanner = aggResultIterator;
         if (orderBy.getOrderByExpressions().isEmpty()) {
+            if (offset != null) {
+                resultScanner = new OffsetResultIterator(resultScanner, offset);
+            }
             if (limit != null) {
-                resultScanner = new LimitingResultIterator(aggResultIterator, limit);
+                resultScanner = new LimitingResultIterator(resultScanner, limit);
             }
         } else {
             int thresholdBytes = context.getConnection().getQueryServices().getProps().getInt(
                     QueryServices.SPOOL_THRESHOLD_BYTES_ATTRIB, QueryServicesOptions.DEFAULT_SPOOL_THRESHOLD_BYTES);
-            resultScanner = new OrderedAggregatingResultIterator(aggResultIterator, orderBy.getOrderByExpressions(), thresholdBytes, limit);
+            resultScanner = new OrderedAggregatingResultIterator(aggResultIterator, orderBy.getOrderByExpressions(), thresholdBytes, limit, offset);
         }
         if (context.getSequenceManager().getSequenceCount() > 0) {
             resultScanner = new SequenceResultIterator(resultScanner, context.getSequenceManager());
@@ -150,6 +159,9 @@ public class ClientAggregatePlan extends ClientProcessingPlan {
         }
         if (statement.isDistinct() && statement.isAggregate()) {
             planSteps.add("CLIENT DISTINCT ON " + projector.toString());
+        }
+        if (offset != null) {
+            planSteps.add("CLIENT OFFSET " + offset);
         }
         if (orderBy.getOrderByExpressions().isEmpty()) {
             if (limit != null) {

@@ -31,7 +31,6 @@ import org.apache.phoenix.expression.Expression;
  * are references to multiple column qualifiers over multiple column families.
  * Also there same qualifier names in different families.
  * 
- * @since 0.1
  */
 public class MultiCFCQKeyValueComparisonFilter extends MultiKeyValueComparisonFilter {
     private final ImmutablePairBytesPtr ptr = new ImmutablePairBytesPtr();
@@ -39,8 +38,8 @@ public class MultiCFCQKeyValueComparisonFilter extends MultiKeyValueComparisonFi
     public MultiCFCQKeyValueComparisonFilter() {
     }
 
-    public MultiCFCQKeyValueComparisonFilter(Expression expression) {
-        super(expression);
+    public MultiCFCQKeyValueComparisonFilter(Expression expression, boolean allCFs, byte[] essentialCF) {
+        super(expression, allCFs, essentialCF);
     }
 
     @Override

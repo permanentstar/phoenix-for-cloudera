@@ -45,6 +45,17 @@
             <name>GENERAL_DATE</name>
         </column>
         <column>
+            <type>DATE</type>
+            <!--SEQUENTIAL is unsupported for DATE -->
+            <dataSequence>RANDOM</dataSequence>
+            <!-- Number [0-100] that represents the probability of creating a null value -->
+            <!-- The higher the number, the more like the value will returned will be null -->
+            <!-- Leaving this tag out is equivalent to having a 0 probability. i.e. never null -->
+            <nullChance>0</nullChance>
+            <useCurrentDate>true</useCurrentDate>
+            <name>NOW_DATE</name>
+        </column>
+        <column>
             <type>DECIMAL</type>
             <dataSequence>RANDOM</dataSequence>
             <minValue>0</minValue>
@@ -82,11 +93,27 @@
                     <maxValue>2019-09-15 11:00:00.000</maxValue>
                 </datavalue>
                 <datavalue distribution="10">
-                    <value>2019-09-19 00:01:00</value>
+                    <value>2019-09-19 00:01:00.000</value>
                 </datavalue>
                 <datavalue distribution="10">
                     <minValue>2019-09-22 00:01:00.000</minValue>
                     <maxValue>2019-09-22 00:01:00.300</maxValue>
+                </datavalue>
+            </valuelist>
+        </column>
+        <column>
+            <type>DATE</type>
+            <name>PRESENT_DATE</name>
+            <minValue>1975</minValue>
+            <maxValue>2025</maxValue>
+            <valuelist>
+                <!-- Distributes randomly with equal chance of being picked -->
+                <datavalue distribution="80">
+                    <!-- Joda time format: yyyy-MM-dd HH:mm:ss.SSS z -->
+                    <useCurrentDate>true</useCurrentDate>
+                </datavalue>
+                <datavalue distribution="20">
+                    <useCurrentDate>true</useCurrentDate>
                 </datavalue>
             </valuelist>
         </column>
@@ -112,7 +139,7 @@
         <column>
             <!-- This column type defines what will generally happen to VARCHAR fields unless they are explicitly defined or overridden elsewhere -->
             <type>VARCHAR</type>
-            <length>15</length>
+            <length>10</length>
             <userDefined>true</userDefined>
             <dataSequence>RANDOM</dataSequence>
             <name>OLDVAL_STRING</name>
@@ -123,7 +150,7 @@
             <type>VARCHAR</type>
             <length>15</length>
             <userDefined>true</userDefined>
-            <dataSequence>SEQUENTIAL</dataSequence>
+            <dataSequence>RANDOM</dataSequence>
             <name>NEWVAL_STRING</name>
             <prefix>TSTPRFX</prefix>
         </column>
@@ -145,7 +172,15 @@
                     <value>LMN</value>
                 </datavalue>
             </valuelist>            
-        </column>        
+        </column>
+        <column>
+            <type>CHAR</type>
+            <userDefined>true</userDefined>
+            <dataSequence>SEQUENTIAL</dataSequence>
+            <length>8</length>
+            <name>OTHER_ID</name>
+            <prefix>z0Oxx00</prefix>
+        </column>
     </datamapping>
     <scenarios>
         <scenario tableName="PHERF.TEST_TABLE" rowCount="100" name="testScenarioRW">
@@ -201,6 +236,7 @@
                     <name>FIELD</name>
                 </column>
             </dataOverride>
+            
             <!--Note: 1. Minimum of executionDurationInMs or numberOfExecutions. Which ever is reached first 
                       2. DDL included in query are executed only once on start of querySet execution.
             -->
@@ -220,6 +256,23 @@
                 <query id="q4" statement="select sum(SOME_INT) from PHERF.TEST_TABLE"/>
             </querySet>
         </scenario>
+        
+        <scenario tableName="PHERF.TEST_TABLE" rowCount="99" name="testPreAndPostDdls">
+            <preScenarioDdls>
+                 <ddl statement="CREATE INDEX IDX_DIVISION ON ? (DIVISION)" tableName="PHERF.PHERF_PROD_TEST_UNSALTED"/>
+            </preScenarioDdls>
+ 
+            <postScenarioDdls>
+                 <ddl statement="CREATE INDEX IDX_OLDVAL_STRING ON ? (OLDVAL_STRING)" tableName="PHERF.PHERF_PROD_TEST_UNSALTED"/>
+                 <ddl statement="CREATE INDEX IDX_CONNECTION_ID ON ? (CONNECTION_ID)" tableName="PHERF.PHERF_PROD_TEST_UNSALTED"/>
+            </postScenarioDdls>
+            
+            <querySet concurrency="1" executionType="SERIAL" executionDurationInMs="5000"
+                      numberOfExecutions="1">
+                <query id="q1" expectedAggregateRowCount="99" statement="select count(*) from PHERF.TEST_TABLE"/>
+            </querySet>
+        </scenario>
+        
         <!-- To configure a Write Workload to write to a tenant specific view users need to
              specify the tenantId attribute on the scenario, specifying the tenant they 
              want to write data for as the attribute value. This tells Pherf to take out a 
@@ -229,8 +282,10 @@
              dynamically create the view see comments below with regard to the ddl attribute. 
         -->
         <scenario tableName="PHERF.TEST_VIEW" tenantId="xyzdefghijklmno"
-                    ddl="CREATE VIEW IF NOT EXISTS PHERF.TEST_VIEW (field1 VARCHAR, field2 VARCHAR) AS SELECT * FROM PHERF.TEST_MULTI_TENANT_TABLE" 
                     rowCount="100" name="testMTWriteScenario">
+           <preScenarioDdls>
+                <ddl statement="CREATE VIEW IF NOT EXISTS PHERF.TEST_VIEW (field1 VARCHAR, field2 VARCHAR) AS SELECT * FROM PHERF.TEST_MULTI_TENANT_TABLE" />
+            </preScenarioDdls>
         </scenario>
         <!--  Scenario level DDL that is dynamically executed before the Write Workload is run.
               This pattern is really useful when you want to write data to multi-tenant view and the tenant id is
@@ -240,8 +295,10 @@
               least once. 
          -->
         <scenario tableName="PHERF.TEST_MT_VIEW" tenantId="abcdefghijklmno" 
-                    ddl="CREATE VIEW IF NOT EXISTS PHERF.TEST_MT_VIEW (field1 VARCHAR) AS SELECT * FROM PHERF.TEST_MULTI_TENANT_TABLE" 
                     rowCount="100" name="testMTDdlWriteScenario">
+            <preScenarioDdls>
+                <ddl statement="CREATE VIEW IF NOT EXISTS PHERF.TEST_MT_VIEW (field1 VARCHAR) AS SELECT * FROM PHERF.TEST_MULTI_TENANT_TABLE" />
+            </preScenarioDdls>
         </scenario>
         
     </scenarios>

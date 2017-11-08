@@ -17,6 +17,8 @@
  */
 package org.apache.phoenix.compile;
 
+import static org.apache.phoenix.schema.PTable.QualifierEncodingScheme.NON_ENCODED_QUALIFIERS;
+
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.util.ArrayList;
@@ -28,6 +30,7 @@ import java.util.Map;
 
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.client.HTableInterface;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.coprocessor.MetaDataProtocol;
 import org.apache.phoenix.coprocessor.MetaDataProtocol.MetaDataMutationResult;
 import org.apache.phoenix.expression.Expression;
@@ -42,6 +45,7 @@ import org.apache.phoenix.parse.FamilyWildcardParseNode;
 import org.apache.phoenix.parse.JoinTableNode;
 import org.apache.phoenix.parse.NamedTableNode;
 import org.apache.phoenix.parse.PFunction;
+import org.apache.phoenix.parse.PSchema;
 import org.apache.phoenix.parse.ParseNode;
 import org.apache.phoenix.parse.ParseNodeFactory;
 import org.apache.phoenix.parse.SelectStatement;
@@ -51,6 +55,7 @@ import org.apache.phoenix.parse.TableNode;
 import org.apache.phoenix.parse.TableNodeVisitor;
 import org.apache.phoenix.parse.TableWildcardParseNode;
 import org.apache.phoenix.parse.UDFParseNode;
+import org.apache.phoenix.parse.UseSchemaStatement;
 import org.apache.phoenix.parse.WildcardParseNode;
 import org.apache.phoenix.query.ConnectionQueryServices;
 import org.apache.phoenix.query.QueryConstants;
@@ -69,10 +74,13 @@ import org.apache.phoenix.schema.PName;
 import org.apache.phoenix.schema.PNameFactory;
 import org.apache.phoenix.schema.PTable;
 import org.apache.phoenix.schema.PTable.IndexType;
+import org.apache.phoenix.schema.PTable.QualifierEncodingScheme;
+import org.apache.phoenix.schema.PTable.ImmutableStorageScheme;
 import org.apache.phoenix.schema.PTableImpl;
 import org.apache.phoenix.schema.PTableKey;
 import org.apache.phoenix.schema.PTableType;
 import org.apache.phoenix.schema.ProjectedColumn;
+import org.apache.phoenix.schema.SchemaNotFoundException;
 import org.apache.phoenix.schema.SortOrder;
 import org.apache.phoenix.schema.TableNotFoundException;
 import org.apache.phoenix.schema.TableRef;
@@ -80,6 +88,7 @@ import org.apache.phoenix.util.Closeables;
 import org.apache.phoenix.util.IndexUtil;
 import org.apache.phoenix.util.LogUtil;
 import org.apache.phoenix.util.SchemaUtil;
+import org.apache.phoenix.util.TransactionUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -121,25 +130,53 @@ public class FromCompiler {
             throw new ColumnNotFoundException(schemaName, tableName, null, colName);
         }
         
+        @Override
         public PFunction resolveFunction(String functionName) throws SQLException {
             throw new FunctionNotFoundException(functionName);
-        };
+        }
 
+        @Override
         public boolean hasUDFs() {
             return false;
-        };
+        }
+
+        @Override
+        public PSchema resolveSchema(String schemaName) throws SQLException {
+            throw new SchemaNotFoundException(schemaName);
+        }
+
+        @Override
+        public List<PSchema> getSchemas() {
+            return Collections.emptyList();
+        }
+
     };
 
     public static ColumnResolver getResolverForCreation(final CreateTableStatement statement, final PhoenixConnection connection)
             throws SQLException {
+    	
         TableName baseTable = statement.getBaseTableName();
+        String schemaName;
         if (baseTable == null) {
+            if (SchemaUtil.isSchemaCheckRequired(statement.getTableType(), connection.getQueryServices().getProps())) {
+                schemaName = statement.getTableName().getSchemaName();
+                if (schemaName != null) {
+                    new SchemaResolver(connection, statement.getTableName().getSchemaName(), true);
+                } else if (connection.getSchema() != null) {
+                    // To ensure schema set through properties or connection string exists before creating table
+                    new SchemaResolver(connection, connection.getSchema(), true);
+                }
+            }
             return EMPTY_TABLE_RESOLVER;
         }
         NamedTableNode tableNode = NamedTableNode.create(null, baseTable, Collections.<ColumnDef>emptyList());
         // Always use non-tenant-specific connection here
         try {
-            SingleTableColumnResolver visitor = new SingleTableColumnResolver(connection, tableNode, true);
+            // We need to always get the latest meta data for the parent table of a create view call to ensure that
+            // that we're copying the current table meta data as of when the view is created. Once we no longer
+            // copy the parent meta data, but store only the local diffs (PHOENIX-3534), we will no longer need
+            // to do this.
+            SingleTableColumnResolver visitor = new SingleTableColumnResolver(connection, tableNode, true, true);
             return visitor;
         } catch (TableNotFoundException e) {
             // Used for mapped VIEW, since we won't be able to resolve that.
@@ -147,7 +184,9 @@ public class FromCompiler {
             // A tenant-specific connection may not create a mapped VIEW.
             if (connection.getTenantId() == null && statement.getTableType() == PTableType.VIEW) {
                 ConnectionQueryServices services = connection.getQueryServices();
-                byte[] fullTableName = SchemaUtil.getTableNameAsBytes(baseTable.getSchemaName(), baseTable.getTableName());
+                byte[] fullTableName = SchemaUtil.getPhysicalName(
+                        SchemaUtil.getTableNameAsBytes(baseTable.getSchemaName(), baseTable.getTableName()),
+                        connection.getQueryServices().getProps()).getName();
                 HTableInterface htable = null;
                 try {
                     htable = services.getTable(fullTableName);
@@ -157,10 +196,15 @@ public class FromCompiler {
                     if (htable != null) Closeables.closeQuietly(htable);
                 }
                 tableNode = NamedTableNode.create(null, baseTable, statement.getColumnDefs());
-                return new SingleTableColumnResolver(connection, tableNode, e.getTimeStamp(), new HashMap<String, UDFParseNode>(1));
+                return new SingleTableColumnResolver(connection, tableNode, e.getTimeStamp(), new HashMap<String, UDFParseNode>(1), false);
             }
             throw e;
         }
+    }
+
+    public static ColumnResolver getResolverForQuery(SelectStatement statement, PhoenixConnection connection)
+            throws SQLException{
+        return getResolverForQuery(statement, connection, false, null);
     }
 
     /**
@@ -176,17 +220,26 @@ public class FromCompiler {
      * @throws TableNotFoundException
      *             if table name not found in schema
      */
-    public static ColumnResolver getResolverForQuery(SelectStatement statement, PhoenixConnection connection)
+    public static ColumnResolver getResolverForQuery(SelectStatement statement, PhoenixConnection connection, boolean alwaysHitServer, TableName mutatingTableName)
     		throws SQLException {
     	TableNode fromNode = statement.getFrom();
     	if (fromNode == null)
     	    return EMPTY_TABLE_RESOLVER;
         if (fromNode instanceof NamedTableNode)
-            return new SingleTableColumnResolver(connection, (NamedTableNode) fromNode, true, 1, statement.getUdfParseNodes());
+            return new SingleTableColumnResolver(connection, (NamedTableNode) fromNode, true, 1, statement.getUdfParseNodes(), alwaysHitServer, mutatingTableName);
 
-        MultiTableColumnResolver visitor = new MultiTableColumnResolver(connection, 1, statement.getUdfParseNodes());
+        MultiTableColumnResolver visitor = new MultiTableColumnResolver(connection, 1, statement.getUdfParseNodes(), mutatingTableName);
         fromNode.accept(visitor);
         return visitor;
+    }
+
+    public static ColumnResolver getResolverForSchema(UseSchemaStatement statement, PhoenixConnection connection)
+            throws SQLException {
+        return new SchemaResolver(connection, SchemaUtil.normalizeIdentifier(statement.getSchemaName()), true);
+    }
+
+    public static ColumnResolver getResolverForSchema(String schema, PhoenixConnection connection) throws SQLException {
+        return new SchemaResolver(connection, SchemaUtil.normalizeIdentifier(schema), true);
     }
 
     public static ColumnResolver getResolver(NamedTableNode tableNode, PhoenixConnection connection) throws SQLException {
@@ -220,13 +273,13 @@ public class FromCompiler {
             Expression sourceExpression = projector.getColumnProjector(column.getPosition()).getExpression();
             PColumnImpl projectedColumn = new PColumnImpl(column.getName(), column.getFamilyName(),
                     sourceExpression.getDataType(), sourceExpression.getMaxLength(), sourceExpression.getScale(), sourceExpression.isNullable(),
-                    column.getPosition(), sourceExpression.getSortOrder(), column.getArraySize(), column.getViewConstant(), column.isViewReferenced(), column.getExpressionStr(), column.isRowTimestamp());
+                    column.getPosition(), sourceExpression.getSortOrder(), column.getArraySize(), column.getViewConstant(), column.isViewReferenced(), column.getExpressionStr(), column.isRowTimestamp(), column.isDynamic(), column.getColumnQualifierBytes());
             projectedColumns.add(projectedColumn);
         }
         PTable t = PTableImpl.makePTable(table, projectedColumns);
         return new SingleTableColumnResolver(connection, new TableRef(tableRef.getTableAlias(), t, tableRef.getLowerBoundTimeStamp(), tableRef.hasDynamicCols()));
     }
-
+    
     public static ColumnResolver getResolver(TableRef tableRef)
             throws SQLException {
         SingleTableColumnResolver visitor = new SingleTableColumnResolver(tableRef);
@@ -235,7 +288,7 @@ public class FromCompiler {
 
     public static ColumnResolver getResolver(PhoenixConnection connection, TableRef tableRef, Map<String, UDFParseNode> udfParseNodes)
             throws SQLException {
-        SingleTableColumnResolver visitor = new SingleTableColumnResolver(connection, tableRef, udfParseNodes);
+        SingleTableColumnResolver visitor = new SingleTableColumnResolver(connection, tableRef, udfParseNodes, null);
         return visitor;
     }
 
@@ -253,57 +306,119 @@ public class FromCompiler {
         return new ProjectedTableColumnResolver(projectedTable, connection, udfParseNodes);
     }
 
+    private static class SchemaResolver extends BaseColumnResolver {
+        private final List<PSchema> schemas;
+
+        public SchemaResolver(PhoenixConnection conn, String schemaName, boolean updateCacheImmediately)
+                throws SQLException {
+            super(conn, 0, null);
+            schemaName = connection.getSchema() != null && schemaName == null ? connection.getSchema() : schemaName;
+            schemas = ImmutableList.of(createSchemaRef(schemaName, updateCacheImmediately));
+        }
+
+        @Override
+        public List<TableRef> getTables() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public TableRef resolveTable(String schemaName, String tableName) throws SQLException {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ColumnRef resolveColumn(String schemaName, String tableName, String colName) throws SQLException {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public PSchema resolveSchema(String schemaName) throws SQLException {
+            return schemas.get(0);
+        }
+
+        @Override
+        public List<PSchema> getSchemas() {
+            return schemas;
+        }
+
+    }
+
     private static class SingleTableColumnResolver extends BaseColumnResolver {
     	private final List<TableRef> tableRefs;
     	private final String alias;
+        private final List<PSchema> schemas;
 
-       public SingleTableColumnResolver(PhoenixConnection connection, NamedTableNode table, long timeStamp, Map<String, UDFParseNode> udfParseNodes) throws SQLException  {
-           super(connection, 0, false, udfParseNodes);
-           List<PColumnFamily> families = Lists.newArrayListWithExpectedSize(table.getDynamicColumns().size());
-           for (ColumnDef def : table.getDynamicColumns()) {
-               if (def.getColumnDefName().getFamilyName() != null) {
-                   families.add(new PColumnFamilyImpl(PNameFactory.newName(def.getColumnDefName().getFamilyName()),Collections.<PColumn>emptyList()));
-               }
-           }
-           Long scn = connection.getSCN();
-           PTable theTable = new PTableImpl(connection.getTenantId(), table.getName().getSchemaName(), table.getName().getTableName(), scn == null ? HConstants.LATEST_TIMESTAMP : scn, families);
-           theTable = this.addDynamicColumns(table.getDynamicColumns(), theTable);
-           alias = null;
-           tableRefs = ImmutableList.of(new TableRef(alias, theTable, timeStamp, !table.getDynamicColumns().isEmpty()));
-       }
+        public SingleTableColumnResolver(PhoenixConnection connection, NamedTableNode table, long timeStamp, Map<String, UDFParseNode> udfParseNodes, boolean isNamespaceMapped) throws SQLException {
+            super(connection, 0, false, udfParseNodes, null);
+            List<PColumnFamily> families = Lists.newArrayListWithExpectedSize(table.getDynamicColumns().size());
+            for (ColumnDef def : table.getDynamicColumns()) {
+                if (def.getColumnDefName().getFamilyName() != null) {
+                    families.add(new PColumnFamilyImpl(PNameFactory.newName(def.getColumnDefName().getFamilyName()),Collections.<PColumn>emptyList()));//, NON_ENCODED_QUALIFIERS));
+                }
+            }
+            Long scn = connection.getSCN();
+            String schema = table.getName().getSchemaName();
+            if (connection.getSchema() != null) {
+                schema = schema != null ? schema : connection.getSchema();
+            }
+            // Storage scheme and encoding scheme don't matter here since the PTable is being used only for the purposes of create table.
+            // The actual values of these two will be determined by the metadata client.
+            PTable theTable = new PTableImpl(connection.getTenantId(), schema, table.getName().getTableName(),
+                    scn == null ? HConstants.LATEST_TIMESTAMP : scn, families, isNamespaceMapped);
+            theTable = this.addDynamicColumns(table.getDynamicColumns(), theTable);
+            alias = null;
+            tableRefs = ImmutableList.of(new TableRef(alias, theTable, timeStamp, !table.getDynamicColumns().isEmpty()));
+            schemas = ImmutableList.of(new PSchema(theTable.getSchemaName().toString(), timeStamp));
+        }
 
         public SingleTableColumnResolver(PhoenixConnection connection, NamedTableNode tableNode, boolean updateCacheImmediately) throws SQLException {
             this(connection, tableNode, updateCacheImmediately, 0, new HashMap<String,UDFParseNode>(1));
         }
+        public SingleTableColumnResolver(PhoenixConnection connection, NamedTableNode tableNode,
+            boolean updateCacheImmediately, boolean alwaysHitServer) throws SQLException {
+          this(connection, tableNode, updateCacheImmediately, 0, new HashMap<String,UDFParseNode>(1), alwaysHitServer, null);
+      }
+        public SingleTableColumnResolver(PhoenixConnection connection, NamedTableNode tableNode,
+            boolean updateCacheImmediately, int tsAddition,
+            Map<String, UDFParseNode> udfParseNodes) throws SQLException {
+          this(connection, tableNode, updateCacheImmediately, tsAddition, udfParseNodes, false, null);
+        }
 
         public SingleTableColumnResolver(PhoenixConnection connection, NamedTableNode tableNode,
                 boolean updateCacheImmediately, int tsAddition,
-                Map<String, UDFParseNode> udfParseNodes) throws SQLException {
-            super(connection, tsAddition, updateCacheImmediately, udfParseNodes);
+                Map<String, UDFParseNode> udfParseNodes, boolean alwaysHitServer, TableName mutatingTableName) throws SQLException {
+            super(connection, tsAddition, updateCacheImmediately, udfParseNodes, mutatingTableName);
             alias = tableNode.getAlias();
-            TableRef tableRef = createTableRef(tableNode, updateCacheImmediately);
+            TableRef tableRef = createTableRef(tableNode.getName().getSchemaName(), tableNode, updateCacheImmediately, alwaysHitServer);
+			PSchema schema = new PSchema(tableRef.getTable().getSchemaName().toString());
             tableRefs = ImmutableList.of(tableRef);
+            schemas = ImmutableList.of(schema);
         }
 
         public SingleTableColumnResolver(PhoenixConnection connection, TableRef tableRef) {
-            super(connection, 0);
+            super(connection, 0, null);
             alias = tableRef.getTableAlias();
             tableRefs = ImmutableList.of(tableRef);
+            schemas = ImmutableList.of(new PSchema(tableRef.getTable().getSchemaName().toString()));
         }
 
-        public SingleTableColumnResolver(PhoenixConnection connection, TableRef tableRef, Map<String, UDFParseNode> udfParseNodes) throws SQLException {
-            super(connection, 0, false, udfParseNodes);
+        public SingleTableColumnResolver(PhoenixConnection connection, TableRef tableRef, Map<String, UDFParseNode> udfParseNodes, TableName mutatingTableName) throws SQLException {
+            super(connection, 0, false, udfParseNodes, mutatingTableName);
             alias = tableRef.getTableAlias();
             tableRefs = ImmutableList.of(tableRef);
+            schemas = ImmutableList.of(new PSchema(tableRef.getTable().getSchemaName().toString()));
         }
 
         public SingleTableColumnResolver(TableRef tableRef) throws SQLException {
-            super(null, 0);
+            super(null, 0, null);
             alias = tableRef.getTableAlias();
             tableRefs = ImmutableList.of(tableRef);
+            schemas = ImmutableList.of(new PSchema(tableRef.getTable().getSchemaName().toString()));
         }
 
-        @Override
+		
+
+		@Override
 		public List<TableRef> getTables() {
 			return tableRefs;
 		}
@@ -359,10 +474,20 @@ public class FromCompiler {
 
 			}
         	PColumn column = resolveCF
-        	        ? tableRef.getTable().getColumnFamily(tableName).getColumn(colName)
-        			: tableRef.getTable().getColumn(colName);
+        	        ? tableRef.getTable().getColumnFamily(tableName).getPColumnForColumnName(colName)
+        			: tableRef.getTable().getColumnForColumnName(colName);
             return new ColumnRef(tableRef, column.getPosition());
 		}
+
+        @Override
+        public PSchema resolveSchema(String schemaName) throws SQLException {
+            return schemas.get(0);
+        }
+
+        @Override
+        public List<PSchema> getSchemas() {
+            return schemas;
+        }
     }
 
     private static abstract class BaseColumnResolver implements ColumnResolver {
@@ -374,16 +499,20 @@ public class FromCompiler {
         private final int tsAddition;
         protected final Map<String, PFunction> functionMap;
         protected List<PFunction> functions;
+        //PHOENIX-3823 : Force update cache when mutating table and select table are same
+        //(UpsertSelect or Delete with select on same table)
+        protected TableName mutatingTableName = null;
 
-        private BaseColumnResolver(PhoenixConnection connection, int tsAddition) {
+        private BaseColumnResolver(PhoenixConnection connection, int tsAddition, TableName mutatingTableName) {
             this.connection = connection;
             this.client = connection == null ? null : new MetaDataClient(connection);
             this.tsAddition = tsAddition;
             functionMap = new HashMap<String, PFunction>(1);
             this.functions = Collections.<PFunction>emptyList();
+            this.mutatingTableName = mutatingTableName;
         }
 
-        private BaseColumnResolver(PhoenixConnection connection, int tsAddition, boolean updateCacheImmediately, Map<String, UDFParseNode> udfParseNodes) throws SQLException {
+        private BaseColumnResolver(PhoenixConnection connection, int tsAddition, boolean updateCacheImmediately, Map<String, UDFParseNode> udfParseNodes, TableName mutatingTableName) throws SQLException {
         	this.connection = connection;
             this.client = connection == null ? null : new MetaDataClient(connection);
             this.tsAddition = tsAddition;
@@ -396,29 +525,65 @@ public class FromCompiler {
                     functionMap.put(function.getFunctionName(), function);
                 }
             }
+            this.mutatingTableName = mutatingTableName;
         }
 
-        protected TableRef createTableRef(NamedTableNode tableNode, boolean updateCacheImmediately) throws SQLException {
+        protected PSchema createSchemaRef(String schemaName, boolean updateCacheImmediately) throws SQLException {
+            long timeStamp = QueryConstants.UNSET_TIMESTAMP;
+            PSchema theSchema = null;
+            MetaDataClient client = new MetaDataClient(connection);
+            if (updateCacheImmediately) {
+                MetaDataMutationResult result = client.updateCache(schemaName, true);
+                timeStamp = TransactionUtil.getResolvedTimestamp(connection, result);
+                theSchema = result.getSchema();
+                if (theSchema == null) { throw new SchemaNotFoundException(schemaName, timeStamp); }
+            } else {
+                try {
+                    theSchema = connection.getSchema(new PTableKey(null, schemaName));
+                } catch (SchemaNotFoundException e1) {}
+                // We always attempt to update the cache in the event of a
+                // SchemaNotFoundException
+                if (theSchema == null) {
+                    MetaDataMutationResult result = client.updateCache(schemaName, true);
+                    if (result.wasUpdated()) {
+                        timeStamp = TransactionUtil.getResolvedTimestamp(connection, result);
+                        theSchema = result.getSchema();
+                    }
+                }
+                if (theSchema == null) { throw new SchemaNotFoundException(schemaName, timeStamp); }
+            }
+            return theSchema;
+        }
+
+        protected TableRef createTableRef(String connectionSchemaName, NamedTableNode tableNode,
+            boolean updateCacheImmediately, boolean alwaysHitServer) throws SQLException {
             String tableName = tableNode.getName().getTableName();
             String schemaName = tableNode.getName().getSchemaName();
+            schemaName = connection.getSchema() != null && schemaName == null ? connection.getSchema() : schemaName;
             long timeStamp = QueryConstants.UNSET_TIMESTAMP;
             String fullTableName = SchemaUtil.getTableName(schemaName, tableName);
             PName tenantId = connection.getTenantId();
             PTable theTable = null;
-            if (updateCacheImmediately || connection.getAutoCommit()) {
-                MetaDataMutationResult result = client.updateCache(schemaName, tableName);
-                timeStamp = result.getMutationTime();
+            if (updateCacheImmediately) {
+                //Force update cache when mutating and ref table are same except for meta tables
+                if(!QueryConstants.SYSTEM_SCHEMA_NAME.equals(schemaName) &&
+                    mutatingTableName!=null && tableNode!=null &&
+                    tableNode.getName().equals(mutatingTableName) ){
+                  alwaysHitServer = true;
+                }
+                MetaDataMutationResult result = client.updateCache(tenantId, schemaName, tableName, alwaysHitServer);
+                timeStamp = TransactionUtil.getResolvedTimestamp(connection, result);
                 theTable = result.getTable();
                 if (theTable == null) {
                     throw new TableNotFoundException(schemaName, tableName, timeStamp);
                 }
             } else {
                 try {
-                    theTable = connection.getMetaDataCache().getTable(new PTableKey(tenantId, fullTableName));
+                    theTable = connection.getTable(new PTableKey(tenantId, fullTableName));
                 } catch (TableNotFoundException e1) {
                     if (tenantId != null) { // Check with null tenantId next
                         try {
-                            theTable = connection.getMetaDataCache().getTable(new PTableKey(null, fullTableName));
+                            theTable = connection.getTable(new PTableKey(null, fullTableName));
                         } catch (TableNotFoundException e2) {
                         }
                     }
@@ -427,7 +592,7 @@ public class FromCompiler {
                 if (theTable == null) {
                     MetaDataMutationResult result = client.updateCache(schemaName, tableName);
                     if (result.wasUpdated()) {
-                        timeStamp = result.getMutationTime();
+                    	timeStamp = TransactionUtil.getResolvedTimestamp(connection, result);
                         theTable = result.getTable();
                     }
                 }
@@ -546,7 +711,7 @@ public class FromCompiler {
                         familyName = PNameFactory.newName(family);
                     }
                     allcolumns.add(new PColumnImpl(name, familyName, dynColumn.getDataType(), dynColumn.getMaxLength(),
-                            dynColumn.getScale(), dynColumn.isNull(), position, dynColumn.getSortOrder(), dynColumn.getArraySize(), null, false, dynColumn.getExpression(), false));
+                            dynColumn.getScale(), dynColumn.isNull(), position, dynColumn.getSortOrder(), dynColumn.getArraySize(), null, false, dynColumn.getExpression(), false, true, Bytes.toBytes(dynColumn.getColumnDefName().getColumnName())));
                     position++;
                 }
                 theTable = PTableImpl.makePTable(theTable, allcolumns);
@@ -572,15 +737,21 @@ public class FromCompiler {
     private static class MultiTableColumnResolver extends BaseColumnResolver implements TableNodeVisitor<Void> {
         protected final ListMultimap<String, TableRef> tableMap;
         protected final List<TableRef> tables;
+        private String connectionSchemaName;
 
         private MultiTableColumnResolver(PhoenixConnection connection, int tsAddition) {
-        	super(connection, tsAddition);
+            super(connection, tsAddition, null);
             tableMap = ArrayListMultimap.<String, TableRef> create();
             tables = Lists.newArrayList();
+            try {
+                connectionSchemaName = connection.getSchema();
+            } catch (SQLException e) {
+                // ignore
+            }
         }
 
-        private MultiTableColumnResolver(PhoenixConnection connection, int tsAddition, Map<String, UDFParseNode> udfParseNodes) throws SQLException {
-            super(connection, tsAddition, false, udfParseNodes);
+        private MultiTableColumnResolver(PhoenixConnection connection, int tsAddition, Map<String, UDFParseNode> udfParseNodes, TableName mutatingTableName) throws SQLException {
+            super(connection, tsAddition, false, udfParseNodes, mutatingTableName);
             tableMap = ArrayListMultimap.<String, TableRef> create();
             tables = Lists.newArrayList();
         }
@@ -605,7 +776,7 @@ public class FromCompiler {
         @Override
         public Void visit(NamedTableNode tableNode) throws SQLException {
             String alias = tableNode.getAlias();
-            TableRef tableRef = createTableRef(tableNode, true);
+            TableRef tableRef = createTableRef(connectionSchemaName, tableNode, true, false);
             PTable theTable = tableRef.getTable();
 
             if (alias != null) {
@@ -642,16 +813,17 @@ public class FromCompiler {
                     // referenced by an outer wild-card select.
                     alias = String.valueOf(position);
                 }
+                PName name = PNameFactory.newName(alias);
                 PColumnImpl column = new PColumnImpl(PNameFactory.newName(alias),
                         PNameFactory.newName(QueryConstants.DEFAULT_COLUMN_FAMILY),
-                        null, 0, 0, true, position++, SortOrder.ASC, null, null, false, null, false);
+                        null, 0, 0, true, position++, SortOrder.ASC, null, null, false, null, false, false, name.getBytes());
                 columns.add(column);
             }
-            PTable t = PTableImpl.makePTable(null, PName.EMPTY_NAME, PName.EMPTY_NAME,
-                    PTableType.SUBQUERY, null, MetaDataProtocol.MIN_TABLE_TIMESTAMP, PTable.INITIAL_SEQ_NUM,
-                    null, null, columns, null, null, Collections.<PTable>emptyList(),
-                    false, Collections.<PName>emptyList(), null, null, false, false, false, null,
-                    null, null, false);
+            PTable t = PTableImpl.makePTable(null, PName.EMPTY_NAME, PName.EMPTY_NAME, PTableType.SUBQUERY, null,
+                    MetaDataProtocol.MIN_TABLE_TIMESTAMP, PTable.INITIAL_SEQ_NUM, null, null, columns, null, null,
+                    Collections.<PTable> emptyList(), false, Collections.<PName> emptyList(), null, null, false, false,
+                    false, null, null, null, false, false, 0, 0L, SchemaUtil
+                            .isNamespaceMappingEnabled(PTableType.SUBQUERY, connection.getQueryServices().getProps()), null, false, ImmutableStorageScheme.ONE_CELL_PER_COLUMN, QualifierEncodingScheme.NON_ENCODED_QUALIFIERS, PTable.EncodedCQCounter.NULL_COUNTER, true);
 
             String alias = subselectNode.getAlias();
             TableRef tableRef = new TableRef(alias, t, MetaDataProtocol.MIN_TABLE_TIMESTAMP, false);
@@ -726,7 +898,7 @@ public class FromCompiler {
                 while (iterator.hasNext()) {
                     TableRef tableRef = iterator.next();
                     try {
-                        PColumn column = tableRef.getTable().getColumn(colName);
+                        PColumn column = tableRef.getTable().getColumnForColumnName(colName);
                         if (theTableRef != null) { throw new AmbiguousColumnException(colName); }
                         theTableRef = tableRef;
                         theColumnPosition = column.getPosition();
@@ -735,19 +907,31 @@ public class FromCompiler {
                     }
                 }
                 if (theTableRef != null) { return new ColumnRef(theTableRef, theColumnPosition); }
-                throw new ColumnNotFoundException(colName);
+                throw new ColumnNotFoundException(schemaName, tableName, null, colName);
             } else {
                 try {
                     TableRef tableRef = resolveTable(schemaName, tableName);
-                    PColumn column = tableRef.getTable().getColumn(colName);
+                    PColumn column = tableRef.getTable().getColumnForColumnName(colName);
                     return new ColumnRef(tableRef, column.getPosition());
                 } catch (TableNotFoundException e) {
                     // Try using the tableName as a columnFamily reference instead
                     ColumnFamilyRef cfRef = resolveColumnFamily(schemaName, tableName);
-                    PColumn column = cfRef.getFamily().getColumn(colName);
+                    PColumn column = cfRef.getFamily().getPColumnForColumnName(colName);
                     return new ColumnRef(cfRef.getTableRef(), column.getPosition());
                 }
             }
+        }
+
+        @Override
+        public PSchema resolveSchema(String schemaName) throws SQLException {
+            // TODO Auto-generated method stub
+            return null;
+        }
+
+        @Override
+        public List<PSchema> getSchemas() {
+            // TODO Auto-generated method stub
+            return null;
         }
     }
     
@@ -756,7 +940,7 @@ public class FromCompiler {
         private final List<TableRef> theTableRefs;
         private final Map<ColumnRef, Integer> columnRefMap;
         private ProjectedTableColumnResolver(PTable projectedTable, PhoenixConnection conn, Map<String, UDFParseNode> udfParseNodes) throws SQLException {
-            super(conn, 0, udfParseNodes);
+            super(conn, 0, udfParseNodes, null);
             Preconditions.checkArgument(projectedTable.getType() == PTableType.PROJECTED);
             this.isLocalIndex = projectedTable.getIndexType() == IndexType.LOCAL;
             this.columnRefMap = new HashMap<ColumnRef, Integer>();
@@ -815,7 +999,7 @@ public class FromCompiler {
             }
             Integer position = columnRefMap.get(colRef);
             if (position == null)
-                throw new ColumnNotFoundException(colName);
+                throw new ColumnNotFoundException(schemaName, tableName, null, colName);
             
             return new ColumnRef(theTableRefs.get(0), position);
         }

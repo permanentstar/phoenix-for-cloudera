@@ -20,13 +20,18 @@ package org.apache.phoenix.execute;
 import java.sql.ParameterMetaData;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.phoenix.compile.GroupByCompiler.GroupBy;
 import org.apache.phoenix.compile.OrderByCompiler.OrderBy;
+import org.apache.phoenix.iterate.DefaultParallelScanGrouper;
+import org.apache.phoenix.iterate.ParallelScanGrouper;
+import org.apache.phoenix.iterate.ResultIterator;
 import org.apache.phoenix.compile.QueryPlan;
 import org.apache.phoenix.compile.RowProjector;
 import org.apache.phoenix.compile.StatementContext;
+import org.apache.phoenix.jdbc.PhoenixStatement.Operation;
 import org.apache.phoenix.parse.FilterableStatement;
 import org.apache.phoenix.query.KeyRange;
 import org.apache.phoenix.schema.TableRef;
@@ -56,6 +61,11 @@ public abstract class DelegateQueryPlan implements QueryPlan {
     @Override
     public TableRef getTableRef() {
         return delegate.getTableRef();
+    }
+
+    @Override
+    public Set<TableRef> getSourceRefs() {
+        return delegate.getSourceRefs();
     }
 
     @Override
@@ -108,4 +118,37 @@ public abstract class DelegateQueryPlan implements QueryPlan {
         return delegate.useRoundRobinIterator();
     }
 
+	@Override
+	public Operation getOperation() {
+		return delegate.getOperation();
+	}
+	
+	@Override
+    public Integer getOffset() {
+        return delegate.getOffset();
+    }
+     
+     @Override
+     public ResultIterator iterator() throws SQLException {
+         return iterator(DefaultParallelScanGrouper.getInstance());
+     }
+ 
+     @Override
+     public ResultIterator iterator(ParallelScanGrouper scanGrouper) throws SQLException {
+         return iterator(scanGrouper, null);
+     }
+
+    public QueryPlan getDelegate() {
+        return delegate;
+    }
+
+    @Override
+    public Long getEstimatedRowsToScan() throws SQLException {
+        return delegate.getEstimatedRowsToScan();
+    }
+
+    @Override
+    public Long getEstimatedBytesToScan() throws SQLException {
+        return delegate.getEstimatedBytesToScan();
+    }
 }

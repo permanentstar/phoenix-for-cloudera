@@ -17,6 +17,7 @@
  */
 package org.apache.phoenix.compile;
 
+import static org.apache.phoenix.schema.PTable.QualifierEncodingScheme.TWO_BYTE_QUALIFIERS;
 import static org.apache.phoenix.util.TestUtil.ATABLE_NAME;
 import static org.apache.phoenix.util.TestUtil.TEST_PROPERTIES;
 import static org.apache.phoenix.util.TestUtil.and;
@@ -25,7 +26,7 @@ import static org.apache.phoenix.util.TestUtil.bindParams;
 import static org.apache.phoenix.util.TestUtil.columnComparison;
 import static org.apache.phoenix.util.TestUtil.constantComparison;
 import static org.apache.phoenix.util.TestUtil.in;
-import static org.apache.phoenix.util.TestUtil.multiKVFilter;
+import static org.apache.phoenix.util.TestUtil.multiEncodedKVFilter;
 import static org.apache.phoenix.util.TestUtil.not;
 import static org.apache.phoenix.util.TestUtil.or;
 import static org.apache.phoenix.util.TestUtil.singleKVFilter;
@@ -50,8 +51,10 @@ import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
 import org.apache.hadoop.hbase.filter.Filter;
+import org.apache.hadoop.hbase.filter.FilterList;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.phoenix.expression.Expression;
+import org.apache.phoenix.expression.KeyValueColumnExpression;
 import org.apache.phoenix.expression.LiteralExpression;
 import org.apache.phoenix.expression.RowKeyColumnExpression;
 import org.apache.phoenix.expression.function.SubstrFunction;
@@ -62,9 +65,12 @@ import org.apache.phoenix.jdbc.PhoenixPreparedStatement;
 import org.apache.phoenix.query.BaseConnectionlessQueryTest;
 import org.apache.phoenix.query.KeyRange;
 import org.apache.phoenix.query.QueryConstants;
-import org.apache.phoenix.query.QueryServicesOptions;
+import org.apache.phoenix.schema.ColumnRef;
+import org.apache.phoenix.schema.PColumn;
+import org.apache.phoenix.schema.PTable;
 import org.apache.phoenix.schema.RowKeyValueAccessor;
 import org.apache.phoenix.schema.SaltingUtil;
+import org.apache.phoenix.schema.TableRef;
 import org.apache.phoenix.schema.types.PChar;
 import org.apache.phoenix.schema.types.PLong;
 import org.apache.phoenix.schema.types.PVarchar;
@@ -103,6 +109,54 @@ public class WhereCompilerTest extends BaseConnectionlessQueryTest {
                 A_INTEGER,
                 0)),
             filter);
+    }
+
+    @Test
+    public void testOrPKWithAndPKAndNotPK() throws SQLException {
+        String query = "select * from bugTable where ID = 'i1' or (ID = 'i2' and company = 'c3')";
+        PhoenixConnection pconn = DriverManager.getConnection(getUrl(), PropertiesUtil.deepCopy(TEST_PROPERTIES)).unwrap(PhoenixConnection.class);
+        pconn.createStatement().execute("create table bugTable(ID varchar primary key,company varchar)");
+        PhoenixPreparedStatement pstmt = newPreparedStatement(pconn, query);
+        QueryPlan plan = pstmt.optimizeQuery();
+        Scan scan = plan.getContext().getScan();
+        Filter filter = scan.getFilter();
+        Expression idExpression = new ColumnRef(plan.getTableRef(), plan.getTableRef().getTable().getColumnForColumnName("ID").getPosition()).newColumnExpression();
+        Expression id = new RowKeyColumnExpression(idExpression,new RowKeyValueAccessor(plan.getTableRef().getTable().getPKColumns(),0));
+        Expression company = new KeyValueColumnExpression(plan.getTableRef().getTable().getColumnForColumnName("COMPANY"));
+        // FilterList has no equals implementation
+        assertTrue(filter instanceof FilterList);
+        FilterList filterList = (FilterList)filter;
+        assertEquals(FilterList.Operator.MUST_PASS_ALL, filterList.getOperator());
+        assertEquals(
+            Arrays.asList(
+                new SkipScanFilter(
+                    ImmutableList.of(Arrays.asList(
+                        pointRange("i1"),
+                        pointRange("i2"))),
+                    SchemaUtil.VAR_BINARY_SCHEMA),
+                singleKVFilter(
+                        or(constantComparison(CompareOp.EQUAL,id,"i1"),
+                           and(constantComparison(CompareOp.EQUAL,id,"i2"),
+                               constantComparison(CompareOp.EQUAL,company,"c3"))))),
+            filterList.getFilters());
+    }
+
+    @Test
+    public void testAndPKAndNotPK() throws SQLException {
+        String query = "select * from bugTable where ID = 'i2' and company = 'c3'";
+        PhoenixConnection pconn = DriverManager.getConnection(getUrl(), PropertiesUtil.deepCopy(TEST_PROPERTIES)).unwrap(PhoenixConnection.class);
+        pconn.createStatement().execute("create table bugTable(ID varchar primary key,company varchar)");
+        PhoenixPreparedStatement pstmt = newPreparedStatement(pconn, query);
+        QueryPlan plan = pstmt.optimizeQuery();
+        Scan scan = plan.getContext().getScan();
+        Filter filter = scan.getFilter();
+        PColumn column = plan.getTableRef().getTable().getColumnForColumnName("COMPANY");
+        assertEquals(
+                singleKVFilter(constantComparison(
+                    CompareOp.EQUAL,
+                    new KeyValueColumnExpression(column),
+                    "c3")),
+                filter);
     }
 
     @Test
@@ -209,10 +263,10 @@ public class WhereCompilerTest extends BaseConnectionlessQueryTest {
         Scan scan = plan.getContext().getScan();
         Filter filter = scan.getFilter();
         assertEquals(
-            multiKVFilter(columnComparison(
+            multiEncodedKVFilter(columnComparison(
                 CompareOp.EQUAL,
                 A_STRING,
-                B_STRING)),
+                B_STRING), TWO_BYTE_QUALIFIERS),
             filter);
     }
 
@@ -244,7 +298,7 @@ public class WhereCompilerTest extends BaseConnectionlessQueryTest {
         Filter filter = scan.getFilter();
 
         assertEquals(
-            multiKVFilter(and(
+            multiEncodedKVFilter(and(
                 constantComparison(
                     CompareOp.EQUAL,
                     A_INTEGER,
@@ -252,7 +306,7 @@ public class WhereCompilerTest extends BaseConnectionlessQueryTest {
                 constantComparison(
                     CompareOp.EQUAL,
                     A_STRING,
-                    "foo"))),
+                    "foo")), TWO_BYTE_QUALIFIERS),
             filter);
     }
 
@@ -887,17 +941,19 @@ public class WhereCompilerTest extends BaseConnectionlessQueryTest {
         QueryPlan plan = pstmt.optimizeQuery();
         Scan scan = plan.getContext().getScan();
         Filter filter = scan.getFilter();
-
+        PTable table = plan.getTableRef().getTable();
+        Expression aInteger = new ColumnRef(new TableRef(table), table.getColumnForColumnName("A_INTEGER").getPosition()).newColumnExpression();
+        Expression aString = new ColumnRef(new TableRef(table), table.getColumnForColumnName("A_STRING").getPosition()).newColumnExpression();
         assertEquals(
-            multiKVFilter(and(
+            multiEncodedKVFilter(and(
                 constantComparison(
                     CompareOp.EQUAL,
-                    A_INTEGER,
+                    aInteger,
                     0),
                 constantComparison(
                     CompareOp.EQUAL,
-                    A_STRING,
-                    "foo"))),
+                    aString,
+                    "foo")), TWO_BYTE_QUALIFIERS),
             filter);
 
         byte[] startRow = PVarchar.INSTANCE.toBytes(tenantId + tenantTypeId);
@@ -919,17 +975,19 @@ public class WhereCompilerTest extends BaseConnectionlessQueryTest {
         QueryPlan plan = pstmt.optimizeQuery();
         Scan scan = plan.getContext().getScan();
         Filter filter = scan.getFilter();
-
+        PTable table = plan.getTableRef().getTable();
+        Expression aInteger = new ColumnRef(new TableRef(table), table.getColumnForColumnName("A_INTEGER").getPosition()).newColumnExpression();
+        Expression aString = new ColumnRef(new TableRef(table), table.getColumnForColumnName("A_STRING").getPosition()).newColumnExpression();
         assertEquals(
-            multiKVFilter(and(
+            multiEncodedKVFilter(and(
                 constantComparison(
                     CompareOp.EQUAL,
-                    A_INTEGER,
+                    aInteger,
                     0),
                 constantComparison(
                     CompareOp.EQUAL,
-                    A_STRING,
-                    "foo"))),
+                    aString,
+                    "foo")), TWO_BYTE_QUALIFIERS),
             filter);
 
         byte[] startRow = PVarchar.INSTANCE.toBytes(tenantId);

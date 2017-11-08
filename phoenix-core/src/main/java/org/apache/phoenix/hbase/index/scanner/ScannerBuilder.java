@@ -34,14 +34,14 @@ import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.filter.FilterList;
 import org.apache.hadoop.hbase.filter.QualifierFilter;
 import org.apache.hadoop.hbase.util.Bytes;
-
-import com.google.common.collect.Lists;
 import org.apache.phoenix.hbase.index.covered.KeyValueStore;
 import org.apache.phoenix.hbase.index.covered.filter.ApplyAndFilterDeletesFilter;
 import org.apache.phoenix.hbase.index.covered.filter.ColumnTrackingNextLargestTimestampFilter;
 import org.apache.phoenix.hbase.index.covered.update.ColumnReference;
 import org.apache.phoenix.hbase.index.covered.update.ColumnTracker;
 import org.apache.phoenix.hbase.index.util.ImmutableBytesPtr;
+
+import com.google.common.collect.Lists;
 
 /**
  *
@@ -57,7 +57,7 @@ public class ScannerBuilder {
     this.update = update;
   }
 
-  public Scanner buildIndexedColumnScanner(Collection<? extends ColumnReference> indexedColumns, ColumnTracker tracker, long ts) {
+  public Scanner buildIndexedColumnScanner(Collection<? extends ColumnReference> indexedColumns, ColumnTracker tracker, long ts, boolean returnNullIfRowNotFound) {
 
     Filter columnFilters = getColumnFilters(indexedColumns);
     FilterList filters = new FilterList(Lists.newArrayList(columnFilters));
@@ -71,7 +71,7 @@ public class ScannerBuilder {
     filters.addFilter(new ApplyAndFilterDeletesFilter(getAllFamilies(indexedColumns)));
 
     // combine the family filters and the rest of the filters as a
-    return getFilteredScanner(filters);
+    return getFilteredScanner(filters, returnNullIfRowNotFound);
   }
 
   /**
@@ -108,14 +108,14 @@ public class ScannerBuilder {
     return families;
   }
 
-  private Scanner getFilteredScanner(Filter filters) {
+  private Scanner getFilteredScanner(Filter filters, boolean returnNullIfRowNotFound) {
     // create a scanner and wrap it as an iterator, meaning you can only go forward
     final FilteredKeyValueScanner kvScanner = new FilteredKeyValueScanner(filters, memstore);
     // seek the scanner to initialize it
     KeyValue start = KeyValueUtil.createFirstOnRow(update.getRow());
     try {
       if (!kvScanner.seek(start)) {
-        return new EmptyScanner();
+        return returnNullIfRowNotFound ? null : new EmptyScanner();
       }
     } catch (IOException e) {
       // This should never happen - everything should explode if so.
@@ -136,7 +136,7 @@ public class ScannerBuilder {
       }
 
       @Override
-      public boolean seek(KeyValue next) throws IOException {
+      public boolean seek(Cell next) throws IOException {
         // check to see if the next kv is after the current key, in which case we can use reseek,
         // which will be more efficient
         Cell peek = kvScanner.peek();
@@ -159,7 +159,7 @@ public class ScannerBuilder {
       }
 
       @Override
-      public void close() {
+      public void close() throws IOException {
         kvScanner.close();
       }
     };

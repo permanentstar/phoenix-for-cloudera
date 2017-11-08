@@ -34,6 +34,8 @@ import org.apache.phoenix.jdbc.PhoenixStatement.Operation;
 import org.apache.phoenix.schema.SortOrder;
 import org.junit.Test;
 
+import com.google.common.base.Joiner;
+
 
 public class QueryParserTest {
     private void parseQuery(String sql) throws IOException, SQLException {
@@ -376,41 +378,41 @@ public class QueryParserTest {
 
     @Test
     public void testParseCreateTableInlinePrimaryKeyWithOrder() throws Exception {
-    	for (String order : new String[]{"asc", "desc"}) {
+        for (String order : new String[]{"asc", "desc"}) {
             String s = "create table core.entity_history_archive (id char(15) primary key ${o})".replace("${o}", order);
-    		CreateTableStatement stmt = (CreateTableStatement)new SQLParser((s)).parseStatement();
-    		List<ColumnDef> columnDefs = stmt.getColumnDefs();
-    		assertEquals(1, columnDefs.size());
-    		assertEquals(SortOrder.fromDDLValue(order), columnDefs.iterator().next().getSortOrder()); 
-    	}
+            CreateTableStatement stmt = (CreateTableStatement)new SQLParser((s)).parseStatement();
+            List<ColumnDef> columnDefs = stmt.getColumnDefs();
+            assertEquals(1, columnDefs.size());
+            assertEquals(SortOrder.fromDDLValue(order), columnDefs.iterator().next().getSortOrder()); 
+        }
     }
     
     @Test
     public void testParseCreateTableOrderWithoutPrimaryKeyFails() throws Exception {
-    	for (String order : new String[]{"asc", "desc"}) {
-    		String stmt = "create table core.entity_history_archive (id varchar(20) ${o})".replace("${o}", order);
-    		try {
-    			new SQLParser((stmt)).parseStatement();
-    			fail("Expected parse exception to be thrown");
-    		} catch (SQLException e) {
-    			String errorMsg = "ERROR 603 (42P00): Syntax error. Unexpected input. Expecting \"RPAREN\", got \"${o}\"".replace("${o}", order);
-    			assertTrue("Expected message to contain \"" + errorMsg + "\" but got \"" + e.getMessage() + "\"", e.getMessage().contains(errorMsg));
-    		}
-    	}
+        for (String order : new String[]{"asc", "desc"}) {
+            String stmt = "create table core.entity_history_archive (id varchar(20) ${o})".replace("${o}", order);
+            try {
+                new SQLParser((stmt)).parseStatement();
+                fail("Expected parse exception to be thrown");
+            } catch (SQLException e) {
+                String errorMsg = "ERROR 603 (42P00): Syntax error. Unexpected input. Expecting \"RPAREN\", got \"${o}\"".replace("${o}", order);
+                assertTrue("Expected message to contain \"" + errorMsg + "\" but got \"" + e.getMessage() + "\"", e.getMessage().contains(errorMsg));
+            }
+        }
     }
     
     @Test
     public void testParseCreateTablePrimaryKeyConstraintWithOrder() throws Exception {
-    	for (String order : new String[]{"asc", "desc"}) {
-    		String s = "create table core.entity_history_archive (id CHAR(15), name VARCHAR(150), constraint pk primary key (id ${o}, name ${o}))".replace("${o}", order);
-    		CreateTableStatement stmt = (CreateTableStatement)new SQLParser((s)).parseStatement();
-    		PrimaryKeyConstraint pkConstraint = stmt.getPrimaryKeyConstraint();
-    		List<Pair<ColumnName,SortOrder>> columns = pkConstraint.getColumnNames();
-    		assertEquals(2, columns.size());
-    		for (Pair<ColumnName,SortOrder> pair : columns) {
-    			assertEquals(SortOrder.fromDDLValue(order), pkConstraint.getColumnWithSortOrder(pair.getFirst()).getSecond());
-    		}    		
-    	}
+        for (String order : new String[]{"asc", "desc"}) {
+            String s = "create table core.entity_history_archive (id CHAR(15), name VARCHAR(150), constraint pk primary key (id ${o}, name ${o}))".replace("${o}", order);
+            CreateTableStatement stmt = (CreateTableStatement)new SQLParser((s)).parseStatement();
+            PrimaryKeyConstraint pkConstraint = stmt.getPrimaryKeyConstraint();
+            List<Pair<ColumnName,SortOrder>> columns = pkConstraint.getColumnNames();
+            assertEquals(2, columns.size());
+            for (Pair<ColumnName,SortOrder> pair : columns) {
+                assertEquals(SortOrder.fromDDLValue(order), pkConstraint.getColumnWithSortOrder(pair.getFirst()).getSecond());
+            }           
+        }
     }
 
     @Test
@@ -439,30 +441,31 @@ public class QueryParserTest {
     }
 
     @Test
-	public void testCreateSequence() throws Exception {
-		String sql = ((
-				"create sequence foo.bar\n" + 
-						"start with 0\n"	+ 
-						"increment by 1\n"));
-		parseQuery(sql);
-	}
-	
-	@Test
-	public void testNextValueForSelect() throws Exception {
-		String sql = ((
-				"select next value for foo.bar \n" + 
-						"from core.custom_entity_data\n"));						
-		parseQuery(sql);
-	}
-	
-	@Test
+    public void testCreateSequence() throws Exception {
+        String sql = ((
+                "create sequence foo.bar\n" + 
+                        "start with 0\n"    + 
+                        "increment by 1\n"));
+        parseQuery(sql);
+    }
+    
+    @Test
+    public void testNextValueForSelect() throws Exception {
+        String sql = ((
+                "select next value for foo.bar \n" + 
+                        "from core.custom_entity_data\n"));                     
+        parseQuery(sql);
+    }
+    
+    @Test
     public void testNextValueForWhere() throws Exception {
         String sql = ((
                 "upsert into core.custom_entity_data\n" + 
                         "select next value for foo.bar from core.custom_entity_data\n"));                    
         parseQuery(sql);
     }
-	
+
+    @Test
     public void testBadCharDef() throws Exception {
         try {
             String sql = ("CREATE TABLE IF NOT EXISTS testBadVarcharDef" + 
@@ -470,7 +473,7 @@ public class QueryParserTest {
             parseQuery(sql);
             fail("Should have caught bad char definition.");
         } catch (SQLException e) {
-            assertTrue(e.getMessage(), e.getMessage().contains("ERROR 208 (22003): CHAR or VARCHAR must have a positive length. columnName=COL"));
+            assertEquals(SQLExceptionCode.NONPOSITIVE_MAX_LENGTH.getErrorCode(), e.getErrorCode());
         }
         try {
             String sql = ("CREATE TABLE IF NOT EXISTS testBadVarcharDef" + 
@@ -478,7 +481,7 @@ public class QueryParserTest {
             parseQuery(sql);
             fail("Should have caught bad char definition.");
         } catch (SQLException e) {
-            assertTrue(e.getMessage(), e.getMessage().contains("ERROR 207 (22003): Missing length for CHAR. columnName=COL"));
+            assertEquals(SQLExceptionCode.MISSING_MAX_LENGTH.getErrorCode(), e.getErrorCode());
         }
     }
 
@@ -490,7 +493,7 @@ public class QueryParserTest {
             parseQuery(sql);
             fail("Should have caught bad varchar definition.");
         } catch (SQLException e) {
-            assertTrue(e.getMessage(), e.getMessage().contains("ERROR 208 (22003): CHAR or VARCHAR must have a positive length. columnName=COL"));
+            assertEquals(SQLExceptionCode.NONPOSITIVE_MAX_LENGTH.getErrorCode(), e.getErrorCode());
         }
     }
 
@@ -522,7 +525,7 @@ public class QueryParserTest {
             parseQuery(sql);
             fail("Should have caught bad binary definition.");
         } catch (SQLException e) {
-            assertTrue(e.getMessage(), e.getMessage().contains("ERROR 211 (22003): BINARY must have a positive length. columnName=COL"));
+            assertEquals(SQLExceptionCode.NONPOSITIVE_MAX_LENGTH.getErrorCode(), e.getErrorCode());
         }
         try {
             String sql = ("CREATE TABLE IF NOT EXISTS testBadVarcharDef" + 
@@ -530,7 +533,7 @@ public class QueryParserTest {
             parseQuery(sql);
             fail("Should have caught bad char definition.");
         } catch (SQLException e) {
-            assertTrue(e.getMessage(), e.getMessage().contains("ERROR 210 (22003): Missing length for BINARY. columnName=COL"));
+            assertEquals(SQLExceptionCode.MISSING_MAX_LENGTH.getErrorCode(), e.getErrorCode());
         }
     }
 
@@ -763,6 +766,20 @@ public class QueryParserTest {
     @Test
     public void testAllElementExpression() throws Exception {
         String sql = "select * from t where 'a' <= ALL(a-b+1)";
+        parseQuery(sql);
+    }
+
+    @Test
+    public void testDoubleBackslash() throws Exception {
+        String sql = "SELECT * FROM T WHERE A LIKE 'a\\(d'";
+        parseQuery(sql);
+    }
+
+    @Test
+    public void testUnicodeSpace() throws Exception {
+        // U+2002 (8194) is a "EN Space" which looks just like a normal space (0x20 in ascii) 
+        String unicodeEnSpace = String.valueOf(Character.toChars(8194));
+        String sql = Joiner.on(unicodeEnSpace).join(new String[] {"SELECT", "*", "FROM", "T"});
         parseQuery(sql);
     }
 }

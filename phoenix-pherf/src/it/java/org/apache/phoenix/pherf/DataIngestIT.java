@@ -31,9 +31,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-import com.jcabi.jdbc.JdbcSession;
-import com.jcabi.jdbc.Outcome;
-
 import org.apache.phoenix.pherf.PherfConstants.GeneratePhoenixStats;
 import org.apache.phoenix.pherf.configuration.Column;
 import org.apache.phoenix.pherf.configuration.DataModel;
@@ -47,7 +44,11 @@ import org.apache.phoenix.pherf.workload.Workload;
 import org.apache.phoenix.pherf.workload.WorkloadExecutor;
 import org.apache.phoenix.pherf.workload.WriteWorkload;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
+
+import com.jcabi.jdbc.JdbcSession;
+import com.jcabi.jdbc.Outcome;
 
 public class DataIngestIT extends ResultBaseTestIT {
 
@@ -100,6 +101,9 @@ public class DataIngestIT extends ResultBaseTestIT {
                 }
             }
 
+            // Verify number of rows written
+            assertExpectedNumberOfRecordsWritten(scenario);
+            
             // Run some queries
             executor = new WorkloadExecutor();
             Workload query = new QueryExecutor(parser, util, executor);
@@ -112,6 +116,22 @@ public class DataIngestIT extends ResultBaseTestIT {
         }
     }
 
+    @Test
+    public void testPreAndPostDataLoadDdls() throws Exception {
+        Scenario scenario = parser.getScenarioByName("testPreAndPostDdls");
+        WorkloadExecutor executor = new WorkloadExecutor();
+        executor.add(new WriteWorkload(util, parser, scenario, GeneratePhoenixStats.NO));
+        
+        try {
+            executor.get();
+            executor.shutdown();
+        } catch (Exception e) {
+            fail("Failed to load data. An exception was thrown: " + e.getMessage());
+        }
+
+        assertExpectedNumberOfRecordsWritten(scenario);
+    }
+    
     @Test
     public void testRWWorkload() throws Exception {
 

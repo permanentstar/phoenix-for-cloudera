@@ -15,18 +15,26 @@ package org.apache.phoenix.spark
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.hbase.{HBaseConfiguration, HConstants}
+import org.apache.phoenix.jdbc.PhoenixEmbeddedDriver
 import org.apache.phoenix.mapreduce.util.{ColumnInfoToStringEncoderDecoder, PhoenixConfigurationUtil}
-import org.apache.phoenix.util.ColumnInfo
+import org.apache.phoenix.util.{ColumnInfo, PhoenixRuntime}
+
 import scala.collection.JavaConversions._
 
 object ConfigurationUtil extends Serializable {
 
-  def getOutputConfiguration(tableName: String, columns: Seq[String], zkUrl: Option[String], conf: Option[Configuration] = None): Configuration = {
+  def getOutputConfiguration(tableName: String, columns: Seq[String], zkUrl: Option[String], tenantId: Option[String] = None, conf: Option[Configuration] = None): Configuration = {
 
     // Create an HBaseConfiguration object from the passed in config, if present
     val config = conf match {
       case Some(c) => HBaseConfiguration.create(c)
       case _ => HBaseConfiguration.create()
+    }
+
+    // Set the tenantId in the config if present
+    tenantId match {
+      case Some(id) => setTenantId(config, id)
+      case _ =>
     }
 
     // Set the table to save to
@@ -38,18 +46,30 @@ object ConfigurationUtil extends Serializable {
 
     // Override the Zookeeper URL if present. Throw exception if no address given.
     zkUrl match {
-      case Some(url) => config.set(HConstants.ZOOKEEPER_QUORUM, url )
+      case Some(url) => setZookeeperURL(config, url)
       case _ => {
-        if(config.get(HConstants.ZOOKEEPER_QUORUM) == null) {
+        if (ConfigurationUtil.getZookeeperURL(config).isEmpty) {
           throw new UnsupportedOperationException(
             s"One of zkUrl or '${HConstants.ZOOKEEPER_QUORUM}' config property must be provided"
           )
         }
       }
     }
-
     // Return the configuration object
     config
+  }
+
+  def setZookeeperURL(conf: Configuration, zkUrl: String) = {
+    val info = PhoenixEmbeddedDriver.ConnectionInfo.create(zkUrl)
+    conf.set(HConstants.ZOOKEEPER_QUORUM, info.getZookeeperQuorum)
+    if (info.getPort != null)
+      conf.setInt(HConstants.ZOOKEEPER_CLIENT_PORT, info.getPort)
+    if (info.getRootNode != null)
+      conf.set(HConstants.ZOOKEEPER_ZNODE_PARENT, info.getRootNode)
+  }
+
+  def setTenantId(conf: Configuration, tenantId: String) = {
+    conf.set(PhoenixRuntime.TENANT_ID_ATTRIB, tenantId)
   }
 
   // Return a serializable representation of the columns
@@ -62,8 +82,15 @@ object ConfigurationUtil extends Serializable {
   def decodeColumns(conf: Configuration): List[ColumnInfo] = {
     ColumnInfoToStringEncoderDecoder.decode(conf).toList
   }
-  
+
   def getZookeeperURL(conf: Configuration): Option[String] = {
-    Option(conf.get(HConstants.ZOOKEEPER_QUORUM))
+    List(
+      Option(conf.get(HConstants.ZOOKEEPER_QUORUM)),
+      Option(conf.get(HConstants.ZOOKEEPER_CLIENT_PORT)),
+      Option(conf.get(HConstants.ZOOKEEPER_ZNODE_PARENT))
+    ).flatten match {
+      case Nil => None
+      case x: List[String] => Some(x.mkString(":"))
+    }
   }
 }

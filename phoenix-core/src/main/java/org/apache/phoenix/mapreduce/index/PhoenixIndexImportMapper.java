@@ -72,7 +72,11 @@ public class PhoenixIndexImportMapper extends Mapper<NullWritable, PhoenixIndexD
             preUpdateProcessor = PhoenixConfigurationUtil.loadPreUpsertProcessor(configuration);
             indexTableName = PhoenixConfigurationUtil.getPhysicalTableName(configuration);
             final Properties overrideProps = new Properties ();
-            overrideProps.put(PhoenixRuntime.CURRENT_SCN_ATTRIB, configuration.get(PhoenixConfigurationUtil.CURRENT_SCN_VALUE));
+            String scn = configuration.get(PhoenixConfigurationUtil.CURRENT_SCN_VALUE);
+            String txScnValue = configuration.get(PhoenixConfigurationUtil.TX_SCN_VALUE);
+            if(txScnValue==null) {
+                overrideProps.put(PhoenixRuntime.CURRENT_SCN_ATTRIB, scn);
+            }
             connection = ConnectionUtil.getOutputConnection(configuration,overrideProps);
             connection.setAutoCommit(false);
             final String upsertQuery = PhoenixConfigurationUtil.getUpsertStatement(configuration);
@@ -113,7 +117,7 @@ public class PhoenixIndexImportMapper extends Mapper<NullWritable, PhoenixIndexD
             }
             connection.rollback();
        } catch (SQLException e) {
-           LOG.error(" Error {}  while read/write of a record ",e.getMessage());
+           LOG.error("Error {}  while read/write of a record ",e.getMessage());
            context.getCounter(PhoenixJobCounters.FAILED_RECORDS).increment(1);
            throw new RuntimeException(e);
         } 
@@ -122,11 +126,12 @@ public class PhoenixIndexImportMapper extends Mapper<NullWritable, PhoenixIndexD
     @Override
     protected void cleanup(Context context) throws IOException, InterruptedException {
          super.cleanup(context);
-         if(connection != null) {
+         if (connection != null) {
              try {
                 connection.close();
             } catch (SQLException e) {
-                LOG.error("Error {} while closing connection in the PhoenixIndexMapper class ",e.getMessage());
+                LOG.error("Error {} while closing connection in the PhoenixIndexMapper class ",
+                        e.getMessage());
             }
          }
     }

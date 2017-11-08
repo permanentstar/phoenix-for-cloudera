@@ -40,8 +40,25 @@ public enum MetricType {
     SPOOL_FILE_COUNTER("Number of spool files created"),
     CACHE_REFRESH_SPLITS_COUNTER("Number of times cache was refreshed because of splits"),
     WALL_CLOCK_TIME_MS("Wall clock time elapsed for the overall query execution"),
-    RESULT_SET_TIME_MS("Wall clock time elapsed for reading all records using resultSet.next()");
-    
+    RESULT_SET_TIME_MS("Wall clock time elapsed for reading all records using resultSet.next()"),
+    OPEN_PHOENIX_CONNECTIONS_COUNTER("Number of open phoenix connections"),
+    QUERY_SERVICES_COUNTER("Number of ConnectionQueryServicesImpl instantiated"),
+    HCONNECTIONS_COUNTER("Number of HConnections created by phoenix driver"),
+    PHOENIX_CONNECTIONS_THROTTLED_COUNTER("Number of client Phoenix connections prevented from opening " +
+                                              "because there are already too many to that target cluster."),
+    PHOENIX_CONNECTIONS_ATTEMPTED_COUNTER("Number of requests for Phoenix connections, whether successful or not."),
+    COUNT_RPC_CALLS("Number of RPC calls"),
+    COUNT_REMOTE_RPC_CALLS("Number of remote RPC calls"),
+    COUNT_MILLS_BETWEEN_NEXTS("Sum of milliseconds between sequential next calls"),
+    COUNT_NOT_SERVING_REGION_EXCEPTION("Number of NotServingRegionException caught"),
+    COUNT_BYTES_REGION_SERVER_RESULTS("Number of bytes in Result objects from region servers"),
+    COUNT_BYTES_IN_REMOTE_RESULTS("Number of bytes in Result objects from remote region servers"),
+    COUNT_SCANNED_REGIONS("Number of regions scanned"),
+    COUNT_RPC_RETRIES("Number of RPC retries"),
+    COUNT_REMOTE_RPC_RETRIES("Number of remote RPC retries"),
+    COUNT_ROWS_SCANNED("Number of rows scanned"),
+    COUNT_ROWS_FILTERED("Number of rows filtered");
+
     private final String description;
 
     private MetricType(String description) {
@@ -50,6 +67,6 @@ public enum MetricType {
 
     public String description() {
         return description;
-    }
+	}
 
 }

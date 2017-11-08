@@ -100,14 +100,14 @@ import com.google.common.annotations.VisibleForTesting;
  *
  * @since 0.1
  */
-public class PhoenixResultSet implements ResultSet, SQLCloseable, org.apache.phoenix.jdbc.Jdbc7Shim.ResultSet {
+public class PhoenixResultSet implements ResultSet, SQLCloseable {
 
     private static final Log LOG = LogFactory.getLog(PhoenixResultSet.class);
 
     private final static String STRING_FALSE = "0";
     private final static BigDecimal BIG_DECIMAL_FALSE = BigDecimal.valueOf(0);
     private final static Integer INTEGER_FALSE = Integer.valueOf(0);
-    private final static Tuple BEFORE_FIRST = new ResultTuple();
+    private final static Tuple BEFORE_FIRST = ResultTuple.EMPTY_TUPLE;
 
     private final ResultIterator scanner;
     private final RowProjector rowProjector;
@@ -242,6 +242,9 @@ public class PhoenixResultSet implements ResultSet, SQLCloseable, org.apache.pho
     @Override
     public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException {
         BigDecimal value = getBigDecimal(columnIndex);
+        if (wasNull) {
+            return null;
+        }
         return value.setScale(scale);
     }
 
@@ -383,6 +386,10 @@ public class PhoenixResultSet implements ResultSet, SQLCloseable, org.apache.pho
         checkCursorState();
         Date value = (Date)rowProjector.getColumnProjector(columnIndex-1).getValue(currentRow,
             PDate.INSTANCE, ptr);
+        wasNull = (value == null);
+        if (wasNull) {
+            return null;
+        }
         cal.setTime(value);
         return new Date(cal.getTimeInMillis());
     }
@@ -769,6 +776,9 @@ public class PhoenixResultSet implements ResultSet, SQLCloseable, org.apache.pho
                 overAllQueryMetrics.startResultSetWatch();
             }
             currentRow = scanner.next();
+            if (currentRow == null) {
+                close();
+            }
             rowProjector.reset();
         } catch (RuntimeException e) {
             // FIXME: Expression.evaluate does not throw SQLException

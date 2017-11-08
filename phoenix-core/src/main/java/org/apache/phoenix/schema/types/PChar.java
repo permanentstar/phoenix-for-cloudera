@@ -104,11 +104,11 @@ public class PChar extends PDataType<String> {
 
     @Override
     public Object toObject(byte[] bytes, int offset, int length, PDataType actualType, SortOrder sortOrder, Integer maxLength, Integer scale) {
-      if (!actualType.isCoercibleTo(this)) { // TODO: have isCoercibleTo that takes bytes, offset?
-        throwConstraintViolationException(actualType,this);
-      }
       if (length == 0) {
         return null;
+      }
+      if (!actualType.isCoercibleTo(this)) {
+        throwConstraintViolationException(actualType, this);
       }
       length = StringUtil.getUnpaddedCharLength(bytes, offset, length, sortOrder);
       if (sortOrder == SortOrder.DESC) {
@@ -145,12 +145,27 @@ public class PChar extends PDataType<String> {
         throw newIllegalDataException("CHAR types may only contain single byte characters (" + o + ")");
       }
       super.coerceBytes(ptr, o, actualType, actualMaxLength, actualScale, actualModifier, desiredMaxLength, desiredScale, expectedModifier);
+      if (ptr.getLength() > 0 && desiredMaxLength != null &&
+              desiredMaxLength > ptr.getLength()) {
+          pad(ptr, desiredMaxLength, expectedModifier);
+      }
     }
 
     @Override
     public boolean isSizeCompatible(ImmutableBytesWritable ptr, Object value, PDataType srcType,
-        Integer maxLength, Integer scale, Integer desiredMaxLength, Integer desiredScale) {
-      return PVarchar.INSTANCE.isSizeCompatible(ptr, value, srcType, maxLength, scale, desiredMaxLength, desiredScale);
+        SortOrder sortOrder, Integer maxLength, Integer scale, Integer desiredMaxLength, Integer desiredScale) {
+        if (ptr.getLength() != 0 && desiredMaxLength != null) {
+            if (maxLength == null) {
+                if (value != null && srcType == INSTANCE) { // Use value if provided
+                    maxLength = ((String)value).length();
+                } else {
+                    this.coerceBytes(ptr, value, srcType, maxLength, scale, sortOrder, desiredMaxLength, desiredScale, sortOrder, true);
+                    maxLength = ptr.getLength(); // Only single byte characters
+                }
+            }
+            return maxLength <= desiredMaxLength;
+        }
+        return true;
     }
 
     @Override

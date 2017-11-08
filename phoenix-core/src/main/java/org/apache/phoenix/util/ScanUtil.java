@@ -20,6 +20,9 @@ package org.apache.phoenix.util;
 import static org.apache.phoenix.compile.OrderByCompiler.OrderBy.FWD_ROW_KEY_ORDER_BY;
 import static org.apache.phoenix.compile.OrderByCompiler.OrderBy.REV_ROW_KEY_ORDER_BY;
 import static org.apache.phoenix.coprocessor.BaseScannerRegionObserver.CUSTOM_ANNOTATIONS;
+import static org.apache.phoenix.coprocessor.BaseScannerRegionObserver.SCAN_ACTUAL_START_ROW;
+import static org.apache.phoenix.coprocessor.BaseScannerRegionObserver.SCAN_START_ROW_SUFFIX;
+import static org.apache.phoenix.coprocessor.BaseScannerRegionObserver.SCAN_STOP_ROW_SUFFIX;
 
 import java.io.IOException;
 import java.sql.SQLException;
@@ -32,6 +35,7 @@ import java.util.NavigableSet;
 import java.util.TreeMap;
 
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.filter.Filter;
@@ -39,6 +43,7 @@ import org.apache.hadoop.hbase.filter.FilterList;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.io.TimeRange;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.io.WritableComparator;
 import org.apache.phoenix.compile.OrderByCompiler.OrderBy;
 import org.apache.phoenix.compile.ScanRanges;
@@ -49,14 +54,21 @@ import org.apache.phoenix.exception.SQLExceptionCode;
 import org.apache.phoenix.exception.SQLExceptionInfo;
 import org.apache.phoenix.execute.DescVarLengthFastByteComparisons;
 import org.apache.phoenix.filter.BooleanExpressionFilter;
+import org.apache.phoenix.filter.DistinctPrefixFilter;
+import org.apache.phoenix.filter.MultiEncodedCQKeyValueComparisonFilter;
 import org.apache.phoenix.filter.SkipScanFilter;
+import org.apache.phoenix.hbase.index.util.ImmutableBytesPtr;
+import org.apache.phoenix.jdbc.PhoenixDatabaseMetaData;
 import org.apache.phoenix.query.KeyRange;
 import org.apache.phoenix.query.KeyRange.Bound;
 import org.apache.phoenix.query.QueryConstants;
 import org.apache.phoenix.query.QueryServices;
 import org.apache.phoenix.query.QueryServicesOptions;
 import org.apache.phoenix.schema.IllegalDataException;
+import org.apache.phoenix.schema.PColumn;
 import org.apache.phoenix.schema.PName;
+import org.apache.phoenix.schema.PTable;
+import org.apache.phoenix.schema.PTable.IndexType;
 import org.apache.phoenix.schema.RowKeySchema;
 import org.apache.phoenix.schema.SortOrder;
 import org.apache.phoenix.schema.ValueSchema.Field;
@@ -100,16 +112,20 @@ public class ScanUtil {
         return scan.getAttribute(BaseScannerRegionObserver.LOCAL_INDEX) != null;
     }
 
+    public static boolean isNonAggregateScan(Scan scan) {
+        return scan.getAttribute(BaseScannerRegionObserver.NON_AGGREGATE_QUERY) != null;
+    }
+
     // Use getTenantId and pass in column name to match against
     // in as PSchema attribute. If column name matches in 
     // KeyExpressions, set on scan as attribute
-    public static ImmutableBytesWritable getTenantId(Scan scan) {
+    public static ImmutableBytesPtr getTenantId(Scan scan) {
         // Create Scan with special aggregation column over which to aggregate
         byte[] tenantId = scan.getAttribute(PhoenixRuntime.TENANT_ID_ATTRIB);
         if (tenantId == null) {
             return null;
         }
-        return new ImmutableBytesWritable(tenantId);
+        return new ImmutableBytesPtr(tenantId);
     }
     
     public static void setCustomAnnotations(Scan scan, byte[] annotations) {
@@ -253,6 +269,21 @@ public class ScanUtil {
             scan.setFilter(new FilterList(FilterList.Operator.MUST_PASS_ALL,Arrays.asList(filter, andWithFilter)));
         }
     }
+    
+    public static void setQualifierRangesOnFilter(Scan scan, Pair<Integer, Integer> minMaxQualifiers) {
+        Filter filter = scan.getFilter();
+        if (filter != null) {
+            if (filter instanceof FilterList) {
+                for (Filter f : ((FilterList)filter).getFilters()) {
+                    if (f instanceof MultiEncodedCQKeyValueComparisonFilter) {
+                        ((MultiEncodedCQKeyValueComparisonFilter)f).setMinMaxQualifierRange(minMaxQualifiers);
+                    }
+                }
+            } else if (filter instanceof MultiEncodedCQKeyValueComparisonFilter) {
+                ((MultiEncodedCQKeyValueComparisonFilter)filter).setMinMaxQualifierRange(minMaxQualifiers);
+            }
+        }
+    }
 
     public static void setTimeRange(Scan scan, long ts) {
         try {
@@ -269,6 +300,14 @@ public class ScanUtil {
             throw new RuntimeException(e);
         }
     }
+    
+	public static void setTimeRange(Scan scan, long minStamp, long maxStamp) {
+		try {
+			scan.setTimeRange(minStamp, maxStamp);
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}
+	}
 
     public static byte[] getMinKey(RowKeySchema schema, List<List<KeyRange>> slots, int[] slotSpan) {
         return getKey(schema, slots, slotSpan, Bound.LOWER);
@@ -375,7 +414,7 @@ public class ScanUtil {
              * incrementing the key value itself, and thus bumping it up too much.
              */
             boolean inclusiveUpper = range.isUpperInclusive() && bound == Bound.UPPER;
-            boolean exclusiveLower = !range.isLowerInclusive() && bound == Bound.LOWER;
+            boolean exclusiveLower = !range.isLowerInclusive() && bound == Bound.LOWER && range != KeyRange.EVERYTHING_RANGE;
             boolean exclusiveUpper = !range.isUpperInclusive() && bound == Bound.UPPER;
             // If we are setting the upper bound of using inclusive single key, we remember 
             // to increment the key if we exit the loop after this iteration.
@@ -511,7 +550,7 @@ public class ScanUtil {
         }
     }
     
-    public static ScanRanges newScanRanges(List<Mutation> mutations) throws SQLException {
+    public static ScanRanges newScanRanges(List<? extends Mutation> mutations) throws SQLException {
         List<KeyRange> keys = Lists.newArrayListWithExpectedSize(mutations.size());
         for (Mutation m : mutations) {
             keys.add(PVarbinary.INSTANCE.getKeyRange(m.getRow()));
@@ -574,40 +613,99 @@ public class ScanUtil {
         scan.setAttribute(BaseScannerRegionObserver.REVERSE_SCAN, PDataType.TRUE_BYTES);
     }
 
+    public static void unsetReversed(Scan scan) {
+        scan.setAttribute(BaseScannerRegionObserver.REVERSE_SCAN, PDataType.FALSE_BYTES);
+    }
+
+    private static byte[] getReversedRow(byte[] startRow) {
+        /*
+         * Must get previous key because this is going from an inclusive start key to an exclusive stop key, and we need
+         * the start key to be included. We get the previous key by decrementing the last byte by one. However, with
+         * variable length data types, we need to fill with the max byte value, otherwise, if the start key is 'ab', we
+         * lower it to 'aa' which would cause 'aab' to be included (which isn't correct). So we fill with a 0xFF byte to
+         * prevent this. A single 0xFF would be enough for our primitive types (as that byte wouldn't occur), but for an
+         * arbitrary VARBINARY key we can't know how many bytes to tack on. It's lame of HBase to force us to do this.
+         */
+        byte[] newStartRow = startRow;
+        if (startRow.length != 0) {
+            newStartRow = Arrays.copyOf(startRow, startRow.length + MAX_FILL_LENGTH_FOR_PREVIOUS_KEY.length);
+            if (ByteUtil.previousKey(newStartRow, startRow.length)) {
+                System.arraycopy(MAX_FILL_LENGTH_FOR_PREVIOUS_KEY, 0, newStartRow, startRow.length,
+                        MAX_FILL_LENGTH_FOR_PREVIOUS_KEY.length);
+            } else {
+                newStartRow = HConstants.EMPTY_START_ROW;
+            }
+        }
+        return newStartRow;
+    }
+
     // Start/stop row must be swapped if scan is being done in reverse
     public static void setupReverseScan(Scan scan) {
         if (isReversed(scan)) {
-            byte[] startRow = scan.getStartRow();
-            byte[] stopRow = scan.getStopRow();
-            byte[] newStartRow = startRow;
-            byte[] newStopRow = stopRow;
-            if (startRow.length != 0) {
-                /*
-                 * Must get previous key because this is going from an inclusive start key to an exclusive stop key, and
-                 * we need the start key to be included. We get the previous key by decrementing the last byte by one.
-                 * However, with variable length data types, we need to fill with the max byte value, otherwise, if the
-                 * start key is 'ab', we lower it to 'aa' which would cause 'aab' to be included (which isn't correct).
-                 * So we fill with a 0xFF byte to prevent this. A single 0xFF would be enough for our primitive types (as
-                 * that byte wouldn't occur), but for an arbitrary VARBINARY key we can't know how many bytes to tack
-                 * on. It's lame of HBase to force us to do this.
-                 */
-                newStartRow = Arrays.copyOf(startRow, startRow.length + MAX_FILL_LENGTH_FOR_PREVIOUS_KEY.length);
-                if (ByteUtil.previousKey(newStartRow, startRow.length)) {
-                    System.arraycopy(MAX_FILL_LENGTH_FOR_PREVIOUS_KEY, 0, newStartRow, startRow.length, MAX_FILL_LENGTH_FOR_PREVIOUS_KEY.length);
-                } else {
-                    newStartRow = HConstants.EMPTY_START_ROW;
-                }
-            }
-            if (stopRow.length != 0) {
-                // Must add null byte because we need the start to be exclusive while it was inclusive
-                newStopRow = ByteUtil.concat(stopRow, QueryConstants.SEPARATOR_BYTE_ARRAY);
-            }
+            byte[] newStartRow = getReversedRow(scan.getStartRow());
+            byte[] newStopRow = getReversedRow(scan.getStopRow());
             scan.setStartRow(newStopRow);
             scan.setStopRow(newStartRow);
             scan.setReversed(true);
         }
     }
 
+    /**
+     * prefix region start key to the start row/stop row suffix and set as scan boundaries.
+     * @param scan
+     * @param lowerInclusiveRegionKey
+     * @param upperExclusiveRegionKey
+     */
+    public static void setupLocalIndexScan(Scan scan, byte[] lowerInclusiveRegionKey,
+            byte[] upperExclusiveRegionKey) {
+        byte[] prefix = lowerInclusiveRegionKey.length == 0 ? new byte[upperExclusiveRegionKey.length]: lowerInclusiveRegionKey;
+        int prefixLength = lowerInclusiveRegionKey.length == 0? upperExclusiveRegionKey.length: lowerInclusiveRegionKey.length;
+        if(scan.getAttribute(SCAN_START_ROW_SUFFIX)!=null) {
+            scan.setStartRow(ScanRanges.prefixKey(scan.getAttribute(SCAN_START_ROW_SUFFIX), 0, prefix, prefixLength));
+        }
+        if(scan.getAttribute(SCAN_STOP_ROW_SUFFIX)!=null) {
+            scan.setStopRow(ScanRanges.prefixKey(scan.getAttribute(SCAN_STOP_ROW_SUFFIX), 0, prefix, prefixLength));
+        }
+    }
+
+    public static byte[] getActualStartRow(Scan localIndexScan, HRegionInfo regionInfo) {
+        return localIndexScan.getAttribute(SCAN_START_ROW_SUFFIX) == null ? localIndexScan
+                .getStartRow() : ScanRanges.prefixKey(localIndexScan.getAttribute(SCAN_START_ROW_SUFFIX), 0 ,
+            regionInfo.getStartKey().length == 0 ? new byte[regionInfo.getEndKey().length]
+                    : regionInfo.getStartKey(),
+            regionInfo.getStartKey().length == 0 ? regionInfo.getEndKey().length : regionInfo
+                    .getStartKey().length);
+    }
+
+    /**
+     * Set all attributes required and boundaries for local index scan.
+     * @param keyOffset
+     * @param regionStartKey
+     * @param regionEndKey
+     * @param newScan
+     */
+    public static void setLocalIndexAttributes(Scan newScan, int keyOffset, byte[] regionStartKey, byte[] regionEndKey, byte[] startRowSuffix, byte[] stopRowSuffix) {
+        if(ScanUtil.isLocalIndex(newScan)) {
+             newScan.setAttribute(SCAN_ACTUAL_START_ROW, regionStartKey);
+             newScan.setStartRow(regionStartKey);
+             newScan.setStopRow(regionEndKey);
+             if (keyOffset > 0 ) {
+                 newScan.setAttribute(SCAN_START_ROW_SUFFIX, ScanRanges.stripPrefix(startRowSuffix, keyOffset));
+             } else {
+                 newScan.setAttribute(SCAN_START_ROW_SUFFIX, startRowSuffix);
+             }
+             if (keyOffset > 0) {
+                 newScan.setAttribute(SCAN_STOP_ROW_SUFFIX, ScanRanges.stripPrefix(stopRowSuffix, keyOffset));
+             } else {
+                 newScan.setAttribute(SCAN_STOP_ROW_SUFFIX, stopRowSuffix);
+             }
+         }
+    }
+
+    public static boolean isContextScan(Scan scan, StatementContext context) {
+        return Bytes.compareTo(context.getScan().getStartRow(), scan.getStartRow()) == 0 && Bytes
+                .compareTo(context.getScan().getStopRow(), scan.getStopRow()) == 0;
+    }
     public static int getRowKeyOffset(byte[] regionStartKey, byte[] regionEndKey) {
         return regionStartKey.length > 0 ? regionStartKey.length : regionEndKey.length;
     }
@@ -619,6 +717,9 @@ public class ScanUtil {
         } else if (filter instanceof SkipScanFilter) {
             SkipScanFilter skipScanFilter = (SkipScanFilter)filter;
             skipScanFilter.setOffset(offset);
+        } else if (filter instanceof DistinctPrefixFilter) {
+            DistinctPrefixFilter prefixFilter = (DistinctPrefixFilter) filter;
+            prefixFilter.setOffset(offset);
         }
     }
 
@@ -692,9 +793,16 @@ public class ScanUtil {
         return Bytes.compareTo(key, 0, nBytesToCheck, ZERO_BYTE_ARRAY, 0, nBytesToCheck) != 0;
     }
 
-    public static byte[] getTenantIdBytes(RowKeySchema schema, boolean isSalted, PName tenantId)
+    public static byte[] getTenantIdBytes(RowKeySchema schema, boolean isSalted, PName tenantId, boolean isMultiTenantTable, boolean isSharedIndex)
             throws SQLException {
-        int pkPos = isSalted ? 1 : 0;
+        return isMultiTenantTable ?
+                  getTenantIdBytes(schema, isSalted, tenantId, isSharedIndex)
+                : tenantId.getBytes();
+    }
+
+    public static byte[] getTenantIdBytes(RowKeySchema schema, boolean isSalted, PName tenantId, boolean isSharedIndex)
+            throws SQLException {
+        int pkPos = (isSalted ? 1 : 0) + (isSharedIndex ? 1 : 0); 
         Field field = schema.getField(pkPos);
         PDataType dataType = field.getDataType();
         byte[] convertedValue;
@@ -724,14 +832,16 @@ public class ScanUtil {
         return filterIterator;
     }
     
-    public static boolean isRoundRobinPossible(OrderBy orderBy, StatementContext context) throws SQLException {
-        int fetchSize  = context.getStatement().getFetchSize();
-        /*
-         * Selecting underlying scanners in a round-robin fashion is possible if there is no ordering of rows needed,
-         * not even row key order. Also no point doing round robin of scanners if fetch size
-         * is 1.
-         */
-        return fetchSize > 1 && !shouldRowsBeInRowKeyOrder(orderBy, context) && orderBy.getOrderByExpressions().isEmpty();
+    /**
+     * Selecting underlying scanners in a round-robin fashion is possible if there is no ordering of
+     * rows needed, not even row key order. Also no point doing round robin of scanners if fetch
+     * size is 1.
+     */
+    public static boolean isRoundRobinPossible(OrderBy orderBy, StatementContext context)
+            throws SQLException {
+        int fetchSize = context.getStatement().getFetchSize();
+        return fetchSize > 1 && !shouldRowsBeInRowKeyOrder(orderBy, context)
+                && orderBy.getOrderByExpressions().isEmpty();
     }
     
     public static boolean forceRowKeyOrder(StatementContext context) {
@@ -775,5 +885,49 @@ public class ScanUtil {
     public static boolean isDefaultTimeRange(TimeRange range) {
         return range.getMin() == 0 && range.getMax() == Long.MAX_VALUE;
     }
+    
+    /**
+     * @return true if scanners could be left open and records retrieved by simply advancing them on
+     *         the server side. To make sure HBase doesn't cancel the leases and close the open
+     *         scanners, we need to periodically renew leases. To look at the earliest HBase version
+     *         that supports renewing leases, see
+     *         {@link PhoenixDatabaseMetaData#MIN_RENEW_LEASE_VERSION}
+     */
+    public static boolean isPacingScannersPossible(StatementContext context) {
+        return context.getConnection().getQueryServices().isRenewingLeasesEnabled();
+    }
 
+    public static void addOffsetAttribute(Scan scan, Integer offset) {
+        scan.setAttribute(BaseScannerRegionObserver.SCAN_OFFSET, Bytes.toBytes(offset));
+    }
+    
+    public static final boolean canQueryBeExecutedSerially(PTable table, OrderBy orderBy, StatementContext context) {
+        /*
+         * If ordering by columns not on the PK axis, we can't execute a query serially because we
+         * need to do a merge sort across all the scans which isn't possible with SerialIterators.
+         * Similar reasoning follows for salted and local index tables when ordering rows in a row
+         * key order. Serial execution is OK in other cases since SerialIterators will execute scans
+         * in the correct order.
+         */
+        if (!orderBy.getOrderByExpressions().isEmpty()
+                || ((table.getBucketNum() != null || table.getIndexType() == IndexType.LOCAL) && shouldRowsBeInRowKeyOrder(
+                    orderBy, context))) {
+            return false;
+        }
+        return true;
+    }
+    
+    public static boolean hasDynamicColumns(PTable table) {
+        for (PColumn col : table.getColumns()) {
+            if (col.isDynamic()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static boolean isIndexRebuild(Scan scan) {
+        return scan.getAttribute((BaseScannerRegionObserver.REBUILD_INDEXES)) != null;
+    }
+    
 }
