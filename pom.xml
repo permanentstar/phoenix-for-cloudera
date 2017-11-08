@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.apache.phoenix</groupId>
   <artifactId>phoenix</artifactId>
-  <version>4.11.0-cdh5.11.2</version>
+  <version>4.11-cdh5.11.1</version>
   <packaging>pom</packaging>
   <name>Apache Phoenix</name>
   <description>A SQL layer over HBase</description>
@@ -74,7 +74,7 @@
   <parent>
     <groupId>com.cloudera.cdh</groupId>
     <artifactId>cdh-root</artifactId>
-    <version>5.11.2</version>
+    <version>5.11.1</version>
   </parent>
 
   <scm>
@@ -93,11 +93,10 @@
     <!-- Hadoop Versions -->
     <hbase.version>${cdh.hbase.version}</hbase.version>
     <hadoop-two.version>${cdh.hadoop.version}</hadoop-two.version>
-    <hadoop-two.mr1.version>${cdh.mr1.version}</hadoop-two.mr1.version>
 
     <!-- Dependency versions -->
     <phoenix.release.version>4.11.0</phoenix.release.version>
-    <cdh.version.number>5.11.2</cdh.version.number>
+    <cdh.version.number>5.11.1</cdh.version.number>
     <cdh.version>cdh${cdh.version.number}</cdh.version>
     <commons-cli.version>1.2</commons-cli.version>
     <hive.version>${cdh.hive.version}</hive.version>
@@ -131,9 +130,9 @@
     <avatica.version>1.10.0</avatica.version>
     <jettyVersion>8.1.7.v20120910</jettyVersion>
     <tephra.version>0.12.0-incubating</tephra.version>
-    <spark.version>${cdh.spark.version}</spark.version>
-    <scala.version>2.10.4</scala.version>
-    <scala.binary.version>2.10</scala.binary.version>
+    <spark.version>2.2.0.cloudera1</spark.version>
+    <scala.version>2.11.11</scala.version>
+    <scala.binary.version>2.11</scala.binary.version>
 
     <!-- Test Dependencies -->
     <mockito-all.version>1.8.5</mockito-all.version>
@@ -552,6 +551,14 @@
         <extensions>true</extensions>
         <inherited>true</inherited>
       </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>2.20.1</version>
+        <configuration>
+          <skipTests>true</skipTests>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
 
@@ -729,7 +736,7 @@
       <dependency>
         <groupId>org.apache.hadoop</groupId>
         <artifactId>hadoop-minicluster</artifactId>
-        <version>${hadoop-two.mr1.version}</version>
+        <version>${hadoop-two.version}</version>
         <optional>true</optional>
         <scope>test</scope>
       </dependency>

@@ -27,7 +27,7 @@
   <parent>
     <groupId>org.apache.phoenix</groupId>
     <artifactId>phoenix</artifactId>
-    <version>4.11.0-cdh5.11.2</version>
+    <version>4.11-cdh5.11.1</version>
   </parent>
   <artifactId>phoenix-queryserver-client</artifactId>
   <name>Phoenix Query Server Client</name>
@@ -180,6 +180,17 @@
   </build>
 
   <dependencies>
+      <dependency>
+          <groupId>org.apache.httpcomponents</groupId>
+          <artifactId>httpcore</artifactId>
+          <version>4.4.4</version>
+      </dependency>
+      <dependency>
+          <groupId>org.apache.httpcomponents</groupId>
+          <artifactId>httpclient</artifactId>
+          <version>4.5.2</version>
+      </dependency>
+
     <dependency>
       <groupId>org.apache.calcite.avatica</groupId>
       <artifactId>avatica-core</artifactId>
@@ -193,5 +204,7 @@
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-common</artifactId>
     </dependency>
+
+
   </dependencies>
 </project>

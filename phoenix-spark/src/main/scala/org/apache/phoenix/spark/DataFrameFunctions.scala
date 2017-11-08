@@ -14,6 +14,7 @@
 package org.apache.phoenix.spark
 
 import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.hadoop.io.NullWritable
 import org.apache.phoenix.mapreduce.PhoenixOutputFormat
 import org.apache.phoenix.mapreduce.util.PhoenixConfigurationUtil
@@ -56,8 +57,10 @@ class DataFrameFunctions(data: DataFrame) extends Serializable {
     }
 
     // Save it
+    // hack for spark2.2 bug  suheng 2017-11-04
+    val path = FileSystem.get(conf).resolvePath(new Path("/tmp")).toString
     phxRDD.saveAsNewAPIHadoopFile(
-      "",
+      path,
       classOf[NullWritable],
       classOf[PhoenixRecordWritable],
       classOf[PhoenixOutputFormat[PhoenixRecordWritable]],
