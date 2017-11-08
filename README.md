@@ -19,10 +19,4 @@ limitations under the License.
 
 <b>[Apache Phoenix](http://phoenix.apache.org/)</b> is a SQL skin over HBase delivered as a client-embedded JDBC driver targeting low latency queries over HBase data. Visit the Apache Phoenix website <b>[here](http://phoenix.apache.org/)</b>.
 
-Copyright ©2014 [Apache Software Foundation](http://www.apache.org/). All Rights Reserved.
-
-### update 2017-11-08 by suheng.cloud
-* integrate phoenix on spark2.2 + cdh5.11.1
-* work around https://issues.apache.org/jira/browse/PHOENIX-4056 & https://issues.apache.org/jira/browse/SPARK-21549
-* use mvn clean install -DskipTests=true for dev
-* use mvn clean deploy -DskipTests=true for prod
+Copyright ©2014 [Apache Software Foundation](http://www.apache.org/). All Rights Reserved. 

@@ -44,6 +44,7 @@ import java.util.Properties;
 
 import org.apache.phoenix.util.PhoenixRuntime;
 import org.apache.phoenix.util.PropertiesUtil;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -55,7 +56,7 @@ import com.google.common.collect.Lists;
 public class CaseStatementIT extends BaseQueryIT {
 
     public CaseStatementIT(String indexDDL, boolean mutable, boolean columnEncoded) {
-        super(indexDDL, mutable, columnEncoded, false);
+        super(indexDDL, mutable, columnEncoded);
     }
     
     @Parameters(name="CaseStatementIT_{index}") // name is used by failsafe as file name in reports

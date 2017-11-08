@@ -46,6 +46,7 @@ import org.apache.phoenix.schema.SequenceAllocation;
 import org.apache.phoenix.schema.SequenceKey;
 import org.apache.phoenix.schema.stats.GuidePostsInfo;
 import org.apache.phoenix.schema.stats.GuidePostsKey;
+import org.apache.tephra.TransactionSystemClient;
 
 
 public interface ConnectionQueryServices extends QueryServices, MetaDataMutated {
@@ -131,6 +132,7 @@ public interface ConnectionQueryServices extends QueryServices, MetaDataMutated 
     public long clearCache() throws SQLException;
     public int getSequenceSaltBuckets();
 
+    TransactionSystemClient getTransactionSystemClient();
     public long getRenewLeaseThresholdMilliSeconds();
     public boolean isRenewingLeasesEnabled();
 

@@ -47,6 +47,7 @@ import org.apache.phoenix.schema.SequenceAllocation;
 import org.apache.phoenix.schema.SequenceKey;
 import org.apache.phoenix.schema.stats.GuidePostsInfo;
 import org.apache.phoenix.schema.stats.GuidePostsKey;
+import org.apache.tephra.TransactionSystemClient;
 
 
 public class DelegateConnectionQueryServices extends DelegateQueryServices implements ConnectionQueryServices {
@@ -253,6 +254,11 @@ public class DelegateConnectionQueryServices extends DelegateQueryServices imple
     @Override
     public int getSequenceSaltBuckets() {
         return getDelegate().getSequenceSaltBuckets();
+    }
+
+    @Override
+    public TransactionSystemClient getTransactionSystemClient() {
+        return getDelegate().getTransactionSystemClient();
     }
 
     @Override

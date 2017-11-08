@@ -101,9 +101,6 @@ public class DataIngestIT extends ResultBaseTestIT {
                 }
             }
 
-            // Verify number of rows written
-            assertExpectedNumberOfRecordsWritten(scenario);
-            
             // Run some queries
             executor = new WorkloadExecutor();
             Workload query = new QueryExecutor(parser, util, executor);
@@ -116,22 +113,6 @@ public class DataIngestIT extends ResultBaseTestIT {
         }
     }
 
-    @Test
-    public void testPreAndPostDataLoadDdls() throws Exception {
-        Scenario scenario = parser.getScenarioByName("testPreAndPostDdls");
-        WorkloadExecutor executor = new WorkloadExecutor();
-        executor.add(new WriteWorkload(util, parser, scenario, GeneratePhoenixStats.NO));
-        
-        try {
-            executor.get();
-            executor.shutdown();
-        } catch (Exception e) {
-            fail("Failed to load data. An exception was thrown: " + e.getMessage());
-        }
-
-        assertExpectedNumberOfRecordsWritten(scenario);
-    }
-    
     @Test
     public void testRWWorkload() throws Exception {
 

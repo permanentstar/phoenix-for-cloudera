@@ -71,5 +71,4 @@ public class DataModel {
         }
         return stringBuilder.toString();
     }
-
 }

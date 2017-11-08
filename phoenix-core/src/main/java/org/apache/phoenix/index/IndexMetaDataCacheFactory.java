@@ -24,13 +24,15 @@ import java.io.IOException;
 import java.sql.SQLException;
 import java.util.List;
 
+import org.apache.tephra.Transaction;
+
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.phoenix.cache.IndexMetaDataCache;
 import org.apache.phoenix.coprocessor.ServerCachingProtocol.ServerCacheFactory;
+import org.apache.phoenix.execute.MutationState;
 import org.apache.phoenix.hbase.index.util.GenericKeyValueBuilder;
 import org.apache.phoenix.memory.MemoryManager.MemoryChunk;
-import org.apache.phoenix.transaction.PhoenixTransactionContext;
-import org.apache.phoenix.transaction.TransactionFactory;
+import org.apache.phoenix.util.TransactionUtil;
 
 public class IndexMetaDataCacheFactory implements ServerCacheFactory {
     public IndexMetaDataCacheFactory() {
@@ -47,12 +49,11 @@ public class IndexMetaDataCacheFactory implements ServerCacheFactory {
     @Override
     public Closeable newCache (ImmutableBytesWritable cachePtr, byte[] txState, final MemoryChunk chunk, boolean useProtoForIndexMaintainer) throws SQLException {
         // just use the standard keyvalue builder - this doesn't really need to be fast
-        
         final List<IndexMaintainer> maintainers = 
                 IndexMaintainer.deserialize(cachePtr, GenericKeyValueBuilder.INSTANCE, useProtoForIndexMaintainer);
-        final PhoenixTransactionContext txnContext;
+        final Transaction txn;
         try {
-            txnContext = txState.length != 0 ? TransactionFactory.getTransactionFactory().getTransactionContext(txState) : null;
+            txn = txState.length!=0 ? MutationState.decodeTransaction(txState) : null;
         } catch (IOException e) {
             throw new SQLException(e);
         }
@@ -69,8 +70,8 @@ public class IndexMetaDataCacheFactory implements ServerCacheFactory {
             }
 
             @Override
-            public PhoenixTransactionContext getTransactionContext() {
-                return txnContext;
+            public Transaction getTransaction() {
+                return txn;
             }
         };
     }
