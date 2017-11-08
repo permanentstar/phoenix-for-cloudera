@@ -33,9 +33,9 @@ import com.google.common.collect.Maps;
  */
 public class IndexToolForPartialBuildWithNamespaceEnabledIT extends IndexToolForPartialBuildIT {
     
-    
-    public IndexToolForPartialBuildWithNamespaceEnabledIT(boolean localIndex, boolean isNamespaceEnabled) {
-        super(localIndex);
+
+    public IndexToolForPartialBuildWithNamespaceEnabledIT(boolean isNamespaceEnabled) {
+        super();
         this.isNamespaceEnabled=isNamespaceEnabled;
     }
     
@@ -49,10 +49,10 @@ public class IndexToolForPartialBuildWithNamespaceEnabledIT extends IndexToolFor
         setUpTestDriver(new ReadOnlyProps(serverProps.entrySet().iterator()), new ReadOnlyProps(clientProps.entrySet().iterator()));
     }
     
-    @Parameters(name="localIndex = {0} , isNamespaceEnabled = {1}")
+    @Parameters(name="isNamespaceEnabled = {0}")
     public static Collection<Boolean[]> data() {
         return Arrays.asList(new Boolean[][] {     
-                 { false, true},{ true, false }
+                 { true },{ false }
            });
     }
     
